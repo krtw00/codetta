@@ -86,6 +86,28 @@ export function registerTools(server: McpServer): void {
     },
   );
 
+  // ----- list_soundfont_presets -----
+  server.registerTool(
+    "list_soundfont_presets",
+    {
+      title: "List presets in a SoundFont (.sf2)",
+      description:
+        "指定 SF2 ファイルに含まれる preset 一覧 (bank / preset / name) と SF2 メタ情報を返す。soundfont 楽器の `preset` / `bank` 値を決める前に使う。file は絶対パスか $CODETTA_SOUNDFONT_DIR (default ~/Music/sf2/) 配下の相対パス。",
+      inputSchema: {
+        file: z
+          .string()
+          .describe(
+            "SF2 ファイル path。絶対 or $CODETTA_SOUNDFONT_DIR 配下の相対",
+          ),
+      },
+    },
+    async (input) => {
+      const args = ["list-soundfont-presets", input.file];
+      const result = await runCliAsToolResult(args);
+      return jsonContent(result);
+    },
+  );
+
   // ----- create_song -----
   server.registerTool(
     "create_song",

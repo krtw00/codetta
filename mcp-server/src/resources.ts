@@ -1,11 +1,26 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { readFile, readdir, stat } from "node:fs/promises";
+import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve, basename } from "node:path";
 
 import { runCli } from "./cli.js";
 import { getWorkspace } from "./workspace.js";
+
+/**
+ * SF2 ファイル一覧 / preset 列挙 resource の探索先。
+ *
+ * - `CODETTA_SOUNDFONT_DIR` 環境変数があればそれ
+ * - 未指定なら `~/Music/sf2/` (codetta-core の resolve_soundfont_path と同じ default)
+ *
+ * dir が存在しなくてもエラーにせず、空一覧を返す扱いにする (listWorkspaceSongs と同じ姿勢)。
+ */
+function getSoundfontDir(): string {
+  const env = process.env.CODETTA_SOUNDFONT_DIR;
+  if (env && env.length > 0) return resolve(env);
+  return join(homedir(), "Music", "sf2");
+}
 
 /**
  * MCP resources の登録。
@@ -59,6 +74,30 @@ async function listPresets(): Promise<{ name: string; path: string }[]> {
   }
   presets.sort((a, b) => a.name.localeCompare(b.name));
   return presets;
+}
+
+async function listSoundfonts(): Promise<{ name: string; path: string }[]> {
+  const dir = getSoundfontDir();
+  let entries: string[];
+  try {
+    entries = await readdir(dir);
+  } catch {
+    return [];
+  }
+  const sf: { name: string; path: string }[] = [];
+  for (const entry of entries) {
+    if (!entry.toLowerCase().endsWith(".sf2")) continue;
+    const full = join(dir, entry);
+    try {
+      const st = await stat(full);
+      if (!st.isFile()) continue;
+      sf.push({ name: entry.replace(/\.sf2$/i, ""), path: full });
+    } catch {
+      // 列挙中に消えた等のレースは無視
+    }
+  }
+  sf.sort((a, b) => a.name.localeCompare(b.name));
+  return sf;
 }
 
 async function listWorkspaceSongs(): Promise<{ name: string; path: string }[]> {
@@ -253,6 +292,51 @@ export function registerResources(server: McpServer): void {
             uri: uri.href,
             mimeType: "application/schema+json",
             text: JSON.stringify(payload.schema, null, 2),
+          },
+        ],
+      };
+    },
+  );
+
+  // ----- codetta://soundfonts/{name} -----
+  server.registerResource(
+    "soundfonts",
+    new ResourceTemplate("codetta://soundfonts/{name}", {
+      list: async () => {
+        const sfs = await listSoundfonts();
+        return {
+          resources: sfs.map((s) => ({
+            uri: `codetta://soundfonts/${s.name}`,
+            name: s.name,
+            description: `SoundFont (.sf2) preset catalog — source: ${basename(s.path)}`,
+            mimeType: "application/json",
+          })),
+        };
+      },
+    }),
+    {
+      title: "Codetta SoundFont presets",
+      description:
+        "$CODETTA_SOUNDFONT_DIR (default ~/Music/sf2/) 配下の .sf2 を読み取り専用 resource として公開。 read すると CLI list-soundfont-presets と同等の JSON (soundfont meta + presets[]) を返す。 {name} は拡張子なしのベース名。 soundfont 楽器の preset / bank 値を決める前の確認に使う。",
+      mimeType: "application/json",
+    },
+    async (uri, variables) => {
+      const rawName = variables.name;
+      const name = Array.isArray(rawName) ? rawName[0] : rawName;
+      if (typeof name !== "string" || name.length === 0) {
+        throw new Error(`Invalid soundfont URI: ${uri.href}`);
+      }
+      if (name.includes("/") || name.includes("..")) {
+        throw new Error(`Invalid soundfont name: ${name}`);
+      }
+      const path = join(getSoundfontDir(), `${name}.sf2`);
+      const payload = await readCliJson(["list-soundfont-presets", path]);
+      return {
+        contents: [
+          {
+            uri: uri.href,
+            mimeType: "application/json",
+            text: JSON.stringify(payload, null, 2),
           },
         ],
       };

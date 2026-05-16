@@ -10,8 +10,10 @@ use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
 use codetta_core::{
-    self as core, CodettaError, Effect, Instrument, Note, NoteOp, Song, Track,
-    KNOWN_DRUM_KEYS, KNOWN_EFFECT_TYPES, KNOWN_INSTRUMENT_TYPES,
+    self as core,
+    synth::soundfont::{list_soundfont_presets, resolve_soundfont_path, SoundFontError},
+    CodettaError, Effect, Instrument, Note, NoteOp, Song, Track, KNOWN_DRUM_KEYS,
+    KNOWN_EFFECT_TYPES, KNOWN_INSTRUMENT_TYPES,
 };
 use serde_json::{json, Map, Value};
 
@@ -69,6 +71,8 @@ enum Command {
     ListInstruments,
     /// 利用可能なエフェクト一覧と各 type のパラメータスキーマを JSON 出力
     ListEffects,
+    /// SoundFont (.sf2) の preset 一覧 + メタ情報を JSON 出力
+    ListSoundfontPresets(ListSoundfontPresetsArgs),
     /// プロジェクトファイル (.codetta) の JSON Schema を出力
     Schema,
 }
@@ -219,6 +223,12 @@ struct SetFxArgs {
 }
 
 #[derive(Args)]
+struct ListSoundfontPresetsArgs {
+    /// SF2 ファイル path (絶対 or `$CODETTA_SOUNDFONT_DIR` 配下の相対)
+    file: PathBuf,
+}
+
+#[derive(Args)]
 struct RenderArgs {
     /// 入力 `.codetta` ファイル
     path: PathBuf,
@@ -250,6 +260,7 @@ fn main() -> ExitCode {
         Command::EditNotes(a) => cmd_edit_notes(a, &cli.common),
         Command::ListInstruments => cmd_list_instruments(),
         Command::ListEffects => cmd_list_effects(),
+        Command::ListSoundfontPresets(a) => cmd_list_soundfont_presets(a, &cli.common),
         Command::Schema => cmd_schema(),
     };
     ExitCode::from(exit)
@@ -667,6 +678,70 @@ fn cmd_list_effects() -> u8 {
         "effects": effect_catalog(),
     }));
     0
+}
+
+fn cmd_list_soundfont_presets(args: ListSoundfontPresetsArgs, common: &CommonOpts) -> u8 {
+    let resolved = resolve_soundfont_path(&args.file);
+    if !common.quiet {
+        eprintln!("[INFO] Reading SF2 {}", resolved.display());
+    }
+    match list_soundfont_presets(&resolved) {
+        Ok((meta, presets)) => {
+            let abs = std::fs::canonicalize(&resolved).unwrap_or_else(|_| resolved.clone());
+            let presets_json: Vec<Value> = presets
+                .iter()
+                .map(|p| json!({ "bank": p.bank, "preset": p.preset, "name": p.name }))
+                .collect();
+            if !common.quiet {
+                eprintln!("[OK] {} preset(s) found", presets.len());
+            }
+            emit_json(&json!({
+                "ok": true,
+                "file": abs.to_string_lossy(),
+                "soundfont": {
+                    "bank_name": meta.bank_name,
+                    "version": meta.version,
+                    "author": meta.author,
+                    "copyright": meta.copyright,
+                    "comments": meta.comments,
+                },
+                "preset_count": presets.len(),
+                "presets": presets_json,
+            }));
+            0
+        }
+        Err(e) => emit_soundfont_error(&e),
+    }
+}
+
+fn emit_soundfont_error(e: &SoundFontError) -> u8 {
+    let (code, exit, msg) = match e {
+        SoundFontError::NotFound(p) => (
+            "FILE_NOT_FOUND",
+            3_u8,
+            format!("SF2 file not found: {}", p.display()),
+        ),
+        SoundFontError::Io { path, source } => (
+            "IO_ERROR",
+            3,
+            format!("I/O error reading {}: {}", path.display(), source),
+        ),
+        SoundFontError::Parse { path, message } => (
+            "SOUNDFONT_PARSE_FAILED",
+            1,
+            format!("Failed to parse SF2 {}: {}", path.display(), message),
+        ),
+        SoundFontError::Synth(m) => (
+            "SOUNDFONT_PARSE_FAILED",
+            1,
+            format!("Synthesizer init error: {m}"),
+        ),
+    };
+    emit_json(&json!({
+        "ok": false,
+        "errors": [{ "code": code, "message": msg }]
+    }));
+    exit
 }
 
 fn cmd_schema() -> u8 {

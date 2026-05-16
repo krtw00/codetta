@@ -254,6 +254,75 @@ fn open_synth(
     Ok(synth)
 }
 
+/// SF2 ファイルのメタ情報 (header chunk からの抜粋)。
+///
+/// rustysynth の [`rustysynth::SoundFontInfo`] を JSON で扱いやすい形に詰め直したもの。
+/// LLM が「この SF2 は何者か」を素早く把握できるように、利用頻度の高い項目のみ含む。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SoundFontMeta {
+    pub bank_name: String,
+    pub version: String,
+    pub author: String,
+    pub copyright: String,
+    pub comments: String,
+}
+
+/// SF2 に含まれる 1 つの preset の bank / program 番号と名前。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PresetInfo {
+    pub bank: u16,
+    pub preset: u16,
+    pub name: String,
+}
+
+/// SF2 ファイルから preset 一覧 + メタ情報を取り出す。
+///
+/// preset は (bank, preset) 昇順で返す (rustysynth 内部の順序は SF2 ファイルの記述順で
+/// 安定しないため、LLM / UI 用途には sort 済みのほうが扱いやすい)。
+///
+/// 失敗パターン:
+/// - file が存在しない → `SoundFontError::NotFound`
+/// - 開けない / parse 失敗 → `SoundFontError::Io` / `SoundFontError::Parse`
+pub fn list_soundfont_presets(
+    sf2_path: impl AsRef<Path>,
+) -> Result<(SoundFontMeta, Vec<PresetInfo>), SoundFontError> {
+    let sf2_path = sf2_path.as_ref();
+    if !sf2_path.exists() {
+        return Err(SoundFontError::NotFound(sf2_path.to_path_buf()));
+    }
+    let mut file = File::open(sf2_path).map_err(|e| SoundFontError::Io {
+        path: sf2_path.to_path_buf(),
+        source: e,
+    })?;
+    let sound_font = SoundFont::new(&mut file).map_err(|e| SoundFontError::Parse {
+        path: sf2_path.to_path_buf(),
+        message: format!("{:?}", e),
+    })?;
+
+    let info = sound_font.get_info();
+    let v = info.get_version();
+    let meta = SoundFontMeta {
+        bank_name: info.get_bank_name().to_string(),
+        version: format!("{}.{}", v.get_major(), v.get_minor()),
+        author: info.get_author().to_string(),
+        copyright: info.get_copyright().to_string(),
+        comments: info.get_comments().to_string(),
+    };
+
+    let mut presets: Vec<PresetInfo> = sound_font
+        .get_presets()
+        .iter()
+        .map(|p| PresetInfo {
+            bank: p.get_bank_number() as u16,
+            preset: p.get_patch_number() as u16,
+            name: p.get_name().to_string(),
+        })
+        .collect();
+    presets.sort_by_key(|p| (p.bank, p.preset));
+
+    Ok((meta, presets))
+}
+
 /// SF2 から 1 ノートを stereo PCM として render する PoC。
 ///
 /// 呼び出し側で SF2 file path は絶対 path に解決済みである前提
@@ -407,6 +476,57 @@ mod tests {
         assert!(
             hold_peak > 0.01,
             "no signal during hold phase: peak={hold_peak}"
+        );
+    }
+
+    #[test]
+    fn list_presets_returns_not_found_for_missing_file() {
+        let err = list_soundfont_presets("/nonexistent/codetta-test/missing.sf2").unwrap_err();
+        assert!(matches!(err, SoundFontError::NotFound(_)));
+    }
+
+    #[test]
+    fn list_presets_when_sf2_available() {
+        let Some(sf2) = sf2_from_env() else {
+            eprintln!("CODETTA_TEST_SF2 not set — skipping SF2 preset enumeration test");
+            return;
+        };
+
+        let (meta, presets) =
+            list_soundfont_presets(&sf2).expect("SF2 preset enumeration should succeed");
+
+        // GeneralUser-GS は 1 つは preset を持つ
+        assert!(
+            !presets.is_empty(),
+            "expected at least one preset in {}",
+            sf2.display()
+        );
+
+        // GM 互換 SF2 なら bank 0 / preset 0 が「Acoustic Grand Piano」相当で必ず入る
+        let gm_piano = presets.iter().find(|p| p.bank == 0 && p.preset == 0);
+        assert!(
+            gm_piano.is_some(),
+            "expected (bank=0, preset=0) entry in GM/GS-compatible SF2"
+        );
+
+        // sort 済みであることを確認 (bank → preset 昇順)
+        for w in presets.windows(2) {
+            let a = (w[0].bank, w[0].preset);
+            let b = (w[1].bank, w[1].preset);
+            assert!(
+                a <= b,
+                "presets should be sorted by (bank, preset): {:?} <= {:?}",
+                a,
+                b
+            );
+        }
+
+        // meta の bank_name は空でないことが多いが、保証はないので存在チェックのみ。
+        // version は SF2 仕様で 16bit major/minor → 文字列表現が "X.Y" 形式になる
+        assert!(
+            meta.version.contains('.'),
+            "version should be major.minor: {}",
+            meta.version
         );
     }
 
