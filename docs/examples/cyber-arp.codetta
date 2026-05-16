@@ -1,0 +1,60 @@
+{
+  "version": "0.1",
+  "metadata": {
+    "name": "Preset: cyber_arp",
+    "bpm": 140,
+    "key": "Am",
+    "time_signature": [4, 4],
+    "tags": ["preset", "cyber", "arp"]
+  },
+  "tracks": [
+    {
+      "id": "arp",
+      "name": "Cyber Arp",
+      "instrument": {
+        "type": "square",
+        "params": { "attack": 0.001, "decay": 0.05, "sustain": 0.0, "release": 0.05, "pulse_width": 0.3 }
+      },
+      "volume": 0.55,
+      "pan": 0.0,
+      "fx": [
+        { "type": "delay", "time": "1/16", "feedback": 0.5, "mix": 0.4 },
+        { "type": "reverb", "size": 0.6, "mix": 0.3 }
+      ],
+      "notes": [
+        { "t": 0.0,  "pitch": "A4", "dur": 0.25, "vel": 95 },
+        { "t": 0.25, "pitch": "C5", "dur": 0.25, "vel": 95 },
+        { "t": 0.5,  "pitch": "E5", "dur": 0.25, "vel": 95 },
+        { "t": 0.75, "pitch": "A5", "dur": 0.25, "vel": 95 },
+        { "t": 1.0,  "pitch": "E5", "dur": 0.25, "vel": 90 },
+        { "t": 1.25, "pitch": "C5", "dur": 0.25, "vel": 90 },
+        { "t": 1.5,  "pitch": "A4", "dur": 0.25, "vel": 90 },
+        { "t": 1.75, "pitch": "C5", "dur": 0.25, "vel": 90 },
+        { "t": 2.0,  "pitch": "F4", "dur": 0.25, "vel": 95 },
+        { "t": 2.25, "pitch": "A4", "dur": 0.25, "vel": 95 },
+        { "t": 2.5,  "pitch": "C5", "dur": 0.25, "vel": 95 },
+        { "t": 2.75, "pitch": "F5", "dur": 0.25, "vel": 95 },
+        { "t": 3.0,  "pitch": "C5", "dur": 0.25, "vel": 90 },
+        { "t": 3.25, "pitch": "A4", "dur": 0.25, "vel": 90 },
+        { "t": 3.5,  "pitch": "F4", "dur": 0.25, "vel": 90 },
+        { "t": 3.75, "pitch": "A4", "dur": 0.25, "vel": 90 },
+        { "t": 4.0,  "pitch": "G4", "dur": 0.25, "vel": 95 },
+        { "t": 4.25, "pitch": "B4", "dur": 0.25, "vel": 95 },
+        { "t": 4.5,  "pitch": "D5", "dur": 0.25, "vel": 95 },
+        { "t": 4.75, "pitch": "G5", "dur": 0.25, "vel": 95 },
+        { "t": 5.0,  "pitch": "D5", "dur": 0.25, "vel": 90 },
+        { "t": 5.25, "pitch": "B4", "dur": 0.25, "vel": 90 },
+        { "t": 5.5,  "pitch": "G4", "dur": 0.25, "vel": 90 },
+        { "t": 5.75, "pitch": "B4", "dur": 0.25, "vel": 90 },
+        { "t": 6.0,  "pitch": "E4", "dur": 0.25, "vel": 95 },
+        { "t": 6.25, "pitch": "G4", "dur": 0.25, "vel": 95 },
+        { "t": 6.5,  "pitch": "B4", "dur": 0.25, "vel": 95 },
+        { "t": 6.75, "pitch": "E5", "dur": 0.25, "vel": 95 },
+        { "t": 7.0,  "pitch": "B4", "dur": 0.25, "vel": 90 },
+        { "t": 7.25, "pitch": "G4", "dur": 0.25, "vel": 90 },
+        { "t": 7.5,  "pitch": "E4", "dur": 0.25, "vel": 90 },
+        { "t": 7.75, "pitch": "G4", "dur": 0.25, "vel": 90 }
+      ]
+    }
+  ]
+}

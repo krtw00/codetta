@@ -1,0 +1,41 @@
+{
+  "version": "0.1",
+  "metadata": {
+    "name": "Preset: cyber_lead",
+    "bpm": 140,
+    "key": "Am",
+    "time_signature": [4, 4],
+    "tags": ["preset", "cyber", "lead"]
+  },
+  "tracks": [
+    {
+      "id": "lead",
+      "name": "Cyber Lead",
+      "instrument": {
+        "type": "saw_lead",
+        "params": { "attack": 0.005, "decay": 0.05, "sustain": 0.8, "release": 0.15 }
+      },
+      "volume": 0.7,
+      "pan": 0.0,
+      "fx": [
+        { "type": "lowpass", "cutoff": 1500, "q": 3.0 },
+        { "type": "delay", "time": "1/8", "feedback": 0.35, "mix": 0.3 },
+        { "type": "reverb", "size": 0.4, "mix": 0.2 }
+      ],
+      "notes": [
+        { "t": 0.0, "pitch": "A4", "dur": 0.5, "vel": 100 },
+        { "t": 0.5, "pitch": "C5", "dur": 0.5, "vel": 100 },
+        { "t": 1.0, "pitch": "E5", "dur": 0.5, "vel": 110 },
+        { "t": 1.5, "pitch": "A5", "dur": 0.5, "vel": 115 },
+        { "t": 2.0, "pitch": "G5", "dur": 0.5, "vel": 105 },
+        { "t": 2.5, "pitch": "E5", "dur": 0.5, "vel": 100 },
+        { "t": 3.0, "pitch": "C5", "dur": 0.5, "vel": 95 },
+        { "t": 3.5, "pitch": "A4", "dur": 0.5, "vel": 90 },
+        { "t": 4.0, "pitch": "E5", "dur": 1.0, "vel": 110 },
+        { "t": 5.0, "pitch": "D5", "dur": 0.5, "vel": 100 },
+        { "t": 5.5, "pitch": "C5", "dur": 0.5, "vel": 100 },
+        { "t": 6.0, "pitch": "A4", "dur": 2.0, "vel": 95 }
+      ]
+    }
+  ]
+}
