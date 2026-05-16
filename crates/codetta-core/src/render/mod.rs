@@ -10,7 +10,7 @@
 //!
 //! - 楽器: `sin` / `saw` / `saw_lead` / `square` / `square_bass` / `triangle` / `saw_pad` (他はスキップして無音)
 //! - サンプルレート: 44.1kHz / ビット深度: 16bit / stereo
-//! - エフェクト: `lowpass` / `highpass` / `distortion` / `delay` を track.fx として適用 (順序通り)。 `reverb` は未対応
+//! - エフェクト: `lowpass` / `highpass` / `distortion` / `delay` / `reverb` を track.fx として適用 (順序通り)
 //! - `--from` / `--to` トリミング: 未対応 (CLI 側で beat → samples 変換時に slice)
 
 use std::path::Path;
@@ -153,7 +153,13 @@ fn apply_effect(buf: &mut [(f32, f32)], fx: &Effect, bpm: u32) {
             let mix = fx.params.get("mix").and_then(|v| v.as_f64()).unwrap_or(0.25) as f32;
             effect::delay(buf, time_sec, feedback, mix, SAMPLE_RATE);
         }
-        // "reverb" は次セッション。 未知の type は validate で検出される。
+        "reverb" => {
+            let size = fx.params.get("size").and_then(|v| v.as_f64()).unwrap_or(0.5) as f32;
+            let damp = fx.params.get("damp").and_then(|v| v.as_f64()).unwrap_or(0.5) as f32;
+            let mix = fx.params.get("mix").and_then(|v| v.as_f64()).unwrap_or(0.2) as f32;
+            effect::reverb(buf, size, damp, mix, SAMPLE_RATE);
+        }
+        // 未知の type は validate で検出される。
         _ => {}
     }
 }
@@ -515,6 +521,32 @@ mod tests {
             diff > 100,
             "fx order should matter (distortion→lowpass vs lowpass→distortion), diff={diff}"
         );
+    }
+
+    #[test]
+    fn reverb_fx_extends_tail() {
+        // 短いノートに reverb (mix=0.6) をかけると、 ノート末尾以降にも残響が残る
+        let mut s = one_note_song();
+        s.tracks[0].fx.push(crate::model::Effect {
+            kind: "reverb".into(),
+            params: {
+                let mut m = serde_json::Map::new();
+                m.insert("size".into(), serde_json::json!(0.7));
+                m.insert("damp".into(), serde_json::json!(0.3));
+                m.insert("mix".into(), serde_json::json!(0.6));
+                m
+            },
+        });
+        let buf = render_to_buffer(&s);
+        // note.dur=0.5 beat / bpm=120 = 0.25 秒。 余韻 2 秒のうち末尾 0.5 秒に reverb tail が乗っているはず
+        let tail_start = buf.len().saturating_sub(SAMPLE_RATE as usize / 2);
+        let tail_rms: f32 = (buf[tail_start..]
+            .iter()
+            .map(|(l, _)| l * l)
+            .sum::<f32>()
+            / (buf.len() - tail_start) as f32)
+            .sqrt();
+        assert!(tail_rms > 1e-5, "reverb tail should leave audible energy: {tail_rms}");
     }
 
     #[test]

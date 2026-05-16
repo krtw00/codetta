@@ -6,7 +6,7 @@
 //! - `lowpass` / `highpass` (SVF、 Chamberlin 型)
 //! - `distortion` (tanh ソフトクリップ + tone lowpass)
 //! - `delay` (循環バッファ、 BPM 同期 / 秒指定の両対応)
-//! - `reverb` は未実装 (次セッション候補)
+//! - `reverb` (Schroeder: 4 comb + 2 allpass、 LR 独立 delay 長で広がり)
 
 use std::f32::consts::PI;
 
@@ -155,6 +155,112 @@ pub fn parse_delay_time(spec: &serde_json::Value, bpm: u32) -> f32 {
 /// 既定サンプルレート (44.1kHz) でのショートカット。
 pub fn lowpass_default_sr(buf: &mut [(f32, f32)], cutoff_hz: f32, q: f32) {
     lowpass(buf, cutoff_hz, q, SAMPLE_RATE);
+}
+
+/// Schroeder reverb (4 comb in parallel → 2 allpass in series)、 ステレオ in-place。
+///
+/// - `size` (0-1): comb delay 長を 0.5x-1.5x スケール、 同時に feedback gain (0.7-0.98) を上げて減衰時間を長くする
+/// - `damp` (0-1): comb 内 1 極 lowpass の係数。 0 で減衰なし、 1 で高域を即座に潰す
+/// - `mix` (0-1): wet 比率。 0 で完全 dry、 1 で完全 wet (= dry を出さない)
+///
+/// L/R は base delay 長を独立に持つ (R は +23 samples) ことで Schroeder 流の擬似ステレオ感を出す。
+/// 4 comb 並列の wet sum を 1/4 にスケールしてから allpass に通すので、 wet 経路の peak は
+/// 入力 peak と同等オーダーに収まる (限界値での発振は feedback 0.98 上限 + soft limiter で保護)。
+pub fn reverb(buf: &mut [(f32, f32)], size: f32, damp: f32, mix: f32, sample_rate: u32) {
+    let size = size.clamp(0.0, 1.0);
+    let damp = damp.clamp(0.0, 1.0);
+    let mix = mix.clamp(0.0, 1.0);
+
+    // Schroeder/Freeverb 由来の 44.1kHz 想定 delay 長を、 実際の sample_rate にスケール
+    let sr_scale = sample_rate as f32 / 44100.0;
+    let size_scale = 0.5 + size; // 0.5x..1.5x
+    let scale_len =
+        |base: usize| ((base as f32 * size_scale * sr_scale) as usize).max(1);
+    let scale_ap = |base: usize| ((base as f32 * sr_scale) as usize).max(1);
+    const COMB_BASE: [usize; 4] = [1116, 1188, 1277, 1356];
+    const ALLPASS_BASE: [usize; 2] = [556, 441];
+    const STEREO_SPREAD: usize = 23;
+
+    let comb_len_l: [usize; 4] =
+        [scale_len(COMB_BASE[0]), scale_len(COMB_BASE[1]), scale_len(COMB_BASE[2]), scale_len(COMB_BASE[3])];
+    let comb_len_r: [usize; 4] = [
+        scale_len(COMB_BASE[0] + STEREO_SPREAD),
+        scale_len(COMB_BASE[1] + STEREO_SPREAD),
+        scale_len(COMB_BASE[2] + STEREO_SPREAD),
+        scale_len(COMB_BASE[3] + STEREO_SPREAD),
+    ];
+    let ap_len_l: [usize; 2] = [scale_ap(ALLPASS_BASE[0]), scale_ap(ALLPASS_BASE[1])];
+    let ap_len_r: [usize; 2] =
+        [scale_ap(ALLPASS_BASE[0] + STEREO_SPREAD), scale_ap(ALLPASS_BASE[1] + STEREO_SPREAD)];
+
+    // feedback は size に対して 0.7-0.98 をリニア。 1.0 直前で発振しないよう 0.98 で打ち止め
+    let feedback = 0.7 + 0.28 * size;
+    let allpass_gain = 0.5;
+
+    let mut comb_l: [Vec<f32>; 4] = [
+        vec![0.0; comb_len_l[0]],
+        vec![0.0; comb_len_l[1]],
+        vec![0.0; comb_len_l[2]],
+        vec![0.0; comb_len_l[3]],
+    ];
+    let mut comb_r: [Vec<f32>; 4] = [
+        vec![0.0; comb_len_r[0]],
+        vec![0.0; comb_len_r[1]],
+        vec![0.0; comb_len_r[2]],
+        vec![0.0; comb_len_r[3]],
+    ];
+    let mut lpf_l = [0.0_f32; 4];
+    let mut lpf_r = [0.0_f32; 4];
+    let mut comb_pos_l = [0_usize; 4];
+    let mut comb_pos_r = [0_usize; 4];
+
+    let mut ap_l: [Vec<f32>; 2] = [vec![0.0; ap_len_l[0]], vec![0.0; ap_len_l[1]]];
+    let mut ap_r: [Vec<f32>; 2] = [vec![0.0; ap_len_r[0]], vec![0.0; ap_len_r[1]]];
+    let mut ap_pos_l = [0_usize; 2];
+    let mut ap_pos_r = [0_usize; 2];
+
+    let dry_gain = 1.0 - mix;
+    // 4 comb 並列の合算 → 1/4 にスケールしてから wet
+    let wet_scale = 0.25 * mix;
+
+    for s in buf.iter_mut() {
+        let in_l = s.0;
+        let in_r = s.1;
+        let mut wet_l = 0.0_f32;
+        let mut wet_r = 0.0_f32;
+
+        for i in 0..4 {
+            let z_l = comb_l[i][comb_pos_l[i]];
+            // damping 用 1 極 lowpass (damp 大 → 高域がより削れる)
+            lpf_l[i] = z_l * (1.0 - damp) + lpf_l[i] * damp;
+            comb_l[i][comb_pos_l[i]] = in_l + lpf_l[i] * feedback;
+            comb_pos_l[i] = (comb_pos_l[i] + 1) % comb_len_l[i];
+            wet_l += z_l;
+
+            let z_r = comb_r[i][comb_pos_r[i]];
+            lpf_r[i] = z_r * (1.0 - damp) + lpf_r[i] * damp;
+            comb_r[i][comb_pos_r[i]] = in_r + lpf_r[i] * feedback;
+            comb_pos_r[i] = (comb_pos_r[i] + 1) % comb_len_r[i];
+            wet_r += z_r;
+        }
+
+        for i in 0..2 {
+            let buffered_l = ap_l[i][ap_pos_l[i]];
+            let out_l = -wet_l + buffered_l;
+            ap_l[i][ap_pos_l[i]] = wet_l + buffered_l * allpass_gain;
+            ap_pos_l[i] = (ap_pos_l[i] + 1) % ap_len_l[i];
+            wet_l = out_l;
+
+            let buffered_r = ap_r[i][ap_pos_r[i]];
+            let out_r = -wet_r + buffered_r;
+            ap_r[i][ap_pos_r[i]] = wet_r + buffered_r * allpass_gain;
+            ap_pos_r[i] = (ap_pos_r[i] + 1) % ap_len_r[i];
+            wet_r = out_r;
+        }
+
+        s.0 = in_l * dry_gain + wet_l * wet_scale;
+        s.1 = in_r * dry_gain + wet_r * wet_scale;
+    }
 }
 
 #[cfg(test)]
@@ -310,5 +416,63 @@ mod tests {
         // 不正な spec は 1/8 拍にフォールバック
         let t = parse_delay_time(&serde_json::json!(null), 120);
         assert!((t - 0.25).abs() < 1e-3, "fallback should be 1/8 beat, got {t}");
+    }
+
+    #[test]
+    fn reverb_dry_passes_through_at_zero_mix() {
+        let mut buf = sine_buf(440.0, 4410);
+        let original = buf.clone();
+        reverb(&mut buf, 0.5, 0.5, 0.0, SAMPLE_RATE);
+        for (a, b) in buf.iter().zip(original.iter()) {
+            assert!((a.0 - b.0).abs() < 1e-6, "mix=0 should be exact dry");
+        }
+    }
+
+    #[test]
+    fn reverb_extends_tail_beyond_input() {
+        // 単発インパルス入力 → 入力長の数倍にわたって wet エコーが残る
+        let mut buf = vec![(0.0_f32, 0.0_f32); SAMPLE_RATE as usize * 3];
+        buf[0] = (1.0, 1.0);
+        reverb(&mut buf, 0.7, 0.3, 1.0, SAMPLE_RATE);
+        // 1 秒以降の任意の窓に有意な振幅が残っている
+        let late_start = SAMPLE_RATE as usize;
+        let tail_max = buf[late_start..]
+            .iter()
+            .map(|(l, _)| l.abs())
+            .fold(0.0_f32, f32::max);
+        assert!(
+            tail_max > 1e-4,
+            "reverb tail should remain audible at 1s, got peak={tail_max}"
+        );
+    }
+
+    #[test]
+    fn reverb_stays_bounded_under_heavy_input() {
+        // 大入力でも発振しない (size=1, damp=0、 feedback 最大)
+        let mut buf = vec![(0.0_f32, 0.0_f32); SAMPLE_RATE as usize * 2];
+        for s in buf.iter_mut().take(1000) {
+            *s = (0.9, 0.9);
+        }
+        reverb(&mut buf, 1.0, 0.0, 1.0, SAMPLE_RATE);
+        let peak = buf.iter().map(|(l, _)| l.abs()).fold(0.0_f32, f32::max);
+        assert!(
+            peak.is_finite() && peak < 2.0,
+            "reverb must stay bounded under heavy input, peak={peak}"
+        );
+    }
+
+    #[test]
+    fn reverb_stereo_widening() {
+        // mono を入れても L/R で異なる出力になる (R は base+23 で delay 長が違うため)
+        let mut buf = vec![(0.0_f32, 0.0_f32); SAMPLE_RATE as usize];
+        buf[0] = (1.0, 1.0);
+        reverb(&mut buf, 0.5, 0.5, 1.0, SAMPLE_RATE);
+        // 0.2 秒以降を比較。 LR 完全同一なら spread が効いていない
+        let from = (SAMPLE_RATE as f32 * 0.2) as usize;
+        let lr_diff: f32 = buf[from..]
+            .iter()
+            .map(|(l, r)| (l - r).abs())
+            .sum();
+        assert!(lr_diff > 0.01, "stereo spread should desync L/R tail, got diff={lr_diff}");
     }
 }
