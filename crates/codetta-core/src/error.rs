@@ -36,11 +36,19 @@ pub enum CodettaError {
     Render(String),
 }
 
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Severity {
+    Error,
+    Warning,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ValidationError {
     pub code: &'static str,
     pub path: String,
     pub message: String,
+    pub severity: Severity,
 }
 
 impl ValidationError {
@@ -49,6 +57,28 @@ impl ValidationError {
             code,
             path: path.into(),
             message: message.into(),
+            severity: Severity::Error,
         }
+    }
+
+    pub fn warning(
+        code: &'static str,
+        path: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            code,
+            path: path.into(),
+            message: message.into(),
+            severity: Severity::Warning,
+        }
+    }
+
+    pub fn is_error(&self) -> bool {
+        matches!(self.severity, Severity::Error)
+    }
+
+    pub fn is_warning(&self) -> bool {
+        matches!(self.severity, Severity::Warning)
     }
 }

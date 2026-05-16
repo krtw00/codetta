@@ -12,7 +12,7 @@ use clap::{Args, Parser, Subcommand};
 use codetta_core::{
     self as core,
     synth::soundfont::{list_soundfont_presets, resolve_soundfont_path, SoundFontError},
-    CodettaError, Effect, Instrument, Note, NoteOp, Song, Track, KNOWN_DRUM_KEYS,
+    CodettaError, Effect, Instrument, Note, NoteOp, Song, Track, ValidationError, KNOWN_DRUM_KEYS,
     KNOWN_EFFECT_TYPES, KNOWN_INSTRUMENT_TYPES,
 };
 use serde_json::{json, Map, Value};
@@ -102,8 +102,12 @@ fn parse_time_sig(s: &str) -> Result<[u32; 2], String> {
     let (n, d) = s
         .split_once('/')
         .ok_or_else(|| "expected N/D (e.g. 4/4)".to_string())?;
-    let n: u32 = n.parse().map_err(|e: std::num::ParseIntError| e.to_string())?;
-    let d: u32 = d.parse().map_err(|e: std::num::ParseIntError| e.to_string())?;
+    let n: u32 = n
+        .parse()
+        .map_err(|e: std::num::ParseIntError| e.to_string())?;
+    let d: u32 = d
+        .parse()
+        .map_err(|e: std::num::ParseIntError| e.to_string())?;
     Ok([n, d])
 }
 
@@ -334,18 +338,30 @@ fn cmd_validate(args: ValidateArgs, common: &CommonOpts) -> u8 {
         Ok(s) => s,
         Err(e) => return emit_error(&e),
     };
-    let errors = core::validate(&song);
+    let (errors, warnings) = partition_validation(core::validate(&song));
     if errors.is_empty() {
         if !common.quiet {
-            eprintln!("[OK] {} is valid", args.path.display());
+            if warnings.is_empty() {
+                eprintln!("[OK] {} is valid", args.path.display());
+            } else {
+                eprintln!(
+                    "[OK] {} is valid ({} warning(s))",
+                    args.path.display(),
+                    warnings.len()
+                );
+            }
         }
-        emit_json(&json!({ "ok": true }));
+        emit_json(&validation_payload(true, &errors, &warnings));
         0
     } else {
         if !common.quiet {
-            eprintln!("[ERROR] {} validation error(s)", errors.len());
+            eprintln!(
+                "[ERROR] {} error(s), {} warning(s)",
+                errors.len(),
+                warnings.len()
+            );
         }
-        emit_json(&json!({ "ok": false, "errors": errors }));
+        emit_json(&validation_payload(false, &errors, &warnings));
         1
     }
 }
@@ -377,17 +393,28 @@ fn cmd_render(args: RenderArgs, common: &CommonOpts) -> u8 {
         Ok(s) => s,
         Err(e) => return emit_error(&e),
     };
-    let verrs = core::validate(&song);
-    if !verrs.is_empty() {
+    let (errors, warnings) = partition_validation(core::validate(&song));
+    if !errors.is_empty() {
         if !common.quiet {
-            eprintln!("[ERROR] {} validation error(s)", verrs.len());
+            eprintln!(
+                "[ERROR] {} error(s), {} warning(s)",
+                errors.len(),
+                warnings.len()
+            );
         }
-        emit_json(&json!({ "ok": false, "errors": verrs }));
+        emit_json(&validation_payload(false, &errors, &warnings));
         return 1;
+    }
+    if !warnings.is_empty() && !common.quiet {
+        eprintln!("[WARN] {} warning(s) — rendering anyway", warnings.len());
     }
 
     if !common.quiet {
-        eprintln!("[INFO] Rendering {} → {}", args.path.display(), args.output.display());
+        eprintln!(
+            "[INFO] Rendering {} → {}",
+            args.path.display(),
+            args.output.display()
+        );
     }
 
     let t0 = std::time::Instant::now();
@@ -396,7 +423,11 @@ fn cmd_render(args: RenderArgs, common: &CommonOpts) -> u8 {
         Err(e) => return emit_error(&e),
     };
     let elapsed = t0.elapsed().as_secs_f32();
-    let rtfactor = if elapsed > 0.0 { stats.duration_sec / elapsed } else { 0.0 };
+    let rtfactor = if elapsed > 0.0 {
+        stats.duration_sec / elapsed
+    } else {
+        0.0
+    };
 
     if !common.quiet {
         eprintln!(
@@ -411,7 +442,7 @@ fn cmd_render(args: RenderArgs, common: &CommonOpts) -> u8 {
     }
 
     let abs = std::fs::canonicalize(&args.output).unwrap_or_else(|_| args.output.clone());
-    emit_json(&json!({
+    let mut payload = json!({
         "ok": true,
         "output": abs.to_string_lossy(),
         "duration_sec": stats.duration_sec,
@@ -419,7 +450,11 @@ fn cmd_render(args: RenderArgs, common: &CommonOpts) -> u8 {
         "bit_depth": stats.bit_depth,
         "render_time_sec": elapsed,
         "rtfactor": rtfactor,
-    }));
+    });
+    if !warnings.is_empty() {
+        payload["warnings"] = json!(warnings);
+    }
+    emit_json(&payload);
     0
 }
 
@@ -462,14 +497,18 @@ fn cmd_add_track(args: AddTrackArgs, common: &CommonOpts) -> u8 {
     if let Err(e) = core::add_track(&mut song, track) {
         return emit_error(&e);
     }
-    if let Some(code) = save_after_validate(&song, &args.path, common) {
-        return code;
-    }
+    let warnings = match save_after_validate(&song, &args.path, common) {
+        Ok(w) => w,
+        Err(code) => return code,
+    };
 
     if !common.quiet {
         eprintln!("[OK] Added track '{}'", args.id);
     }
-    emit_json(&json!({ "ok": true, "track_id": args.id }));
+    emit_json(&with_warnings(
+        json!({ "ok": true, "track_id": args.id }),
+        &warnings,
+    ));
     0
 }
 
@@ -481,13 +520,17 @@ fn cmd_remove_track(args: RemoveTrackArgs, common: &CommonOpts) -> u8 {
     if let Err(e) = core::remove_track(&mut song, &args.id) {
         return emit_error(&e);
     }
-    if let Some(code) = save_after_validate(&song, &args.path, common) {
-        return code;
-    }
+    let warnings = match save_after_validate(&song, &args.path, common) {
+        Ok(w) => w,
+        Err(code) => return code,
+    };
     if !common.quiet {
         eprintln!("[OK] Removed track '{}'", args.id);
     }
-    emit_json(&json!({ "ok": true, "track_id": args.id }));
+    emit_json(&with_warnings(
+        json!({ "ok": true, "track_id": args.id }),
+        &warnings,
+    ));
     0
 }
 
@@ -504,13 +547,17 @@ fn cmd_set_notes(args: SetNotesArgs, common: &CommonOpts) -> u8 {
         Ok(n) => n,
         Err(e) => return emit_error(&e),
     };
-    if let Some(code) = save_after_validate(&song, &args.path, common) {
-        return code;
-    }
+    let warnings = match save_after_validate(&song, &args.path, common) {
+        Ok(w) => w,
+        Err(code) => return code,
+    };
     if !common.quiet {
         eprintln!("[OK] Set {count} note(s) on track '{}'", args.track);
     }
-    emit_json(&json!({ "ok": true, "track_id": args.track, "note_count": count }));
+    emit_json(&with_warnings(
+        json!({ "ok": true, "track_id": args.track, "note_count": count }),
+        &warnings,
+    ));
     0
 }
 
@@ -527,22 +574,26 @@ fn cmd_add_notes(args: AddNotesArgs, common: &CommonOpts) -> u8 {
         Ok(t) => t,
         Err(e) => return emit_error(&e),
     };
-    if let Some(code) = save_after_validate(&song, &args.path, common) {
-        return code;
-    }
+    let warnings = match save_after_validate(&song, &args.path, common) {
+        Ok(w) => w,
+        Err(code) => return code,
+    };
     if !common.quiet {
         eprintln!(
             "[OK] Added {added} note(s) to '{}' (skipped {skipped} dup, total {total})",
             args.track
         );
     }
-    emit_json(&json!({
-        "ok": true,
-        "track_id": args.track,
-        "added": added,
-        "skipped_duplicates": skipped,
-        "total_notes": total,
-    }));
+    emit_json(&with_warnings(
+        json!({
+            "ok": true,
+            "track_id": args.track,
+            "added": added,
+            "skipped_duplicates": skipped,
+            "total_notes": total,
+        }),
+        &warnings,
+    ));
     0
 }
 
@@ -555,13 +606,17 @@ fn cmd_clear_notes(args: ClearNotesArgs, common: &CommonOpts) -> u8 {
         Ok(n) => n,
         Err(e) => return emit_error(&e),
     };
-    if let Some(code) = save_after_validate(&song, &args.path, common) {
-        return code;
-    }
+    let warnings = match save_after_validate(&song, &args.path, common) {
+        Ok(w) => w,
+        Err(code) => return code,
+    };
     if !common.quiet {
         eprintln!("[OK] Cleared {removed} note(s) from '{}'", args.track);
     }
-    emit_json(&json!({ "ok": true, "track_id": args.track, "removed": removed }));
+    emit_json(&with_warnings(
+        json!({ "ok": true, "track_id": args.track, "removed": removed }),
+        &warnings,
+    ));
     0
 }
 
@@ -592,21 +647,25 @@ fn cmd_set_instrument(args: SetInstrumentArgs, common: &CommonOpts) -> u8 {
         Ok(p) => p,
         Err(e) => return emit_error(&e),
     };
-    if let Some(code) = save_after_validate(&song, &args.path, common) {
-        return code;
-    }
+    let warnings = match save_after_validate(&song, &args.path, common) {
+        Ok(w) => w,
+        Err(code) => return code,
+    };
     if !common.quiet {
         eprintln!(
             "[OK] Set instrument on '{}': {} → {}",
             args.track, prev, args.kind
         );
     }
-    emit_json(&json!({
-        "ok": true,
-        "track_id": args.track,
-        "instrument": args.kind,
-        "previous": prev,
-    }));
+    emit_json(&with_warnings(
+        json!({
+            "ok": true,
+            "track_id": args.track,
+            "instrument": args.kind,
+            "previous": prev,
+        }),
+        &warnings,
+    ));
     0
 }
 
@@ -623,13 +682,17 @@ fn cmd_set_fx(args: SetFxArgs, common: &CommonOpts) -> u8 {
         Ok(n) => n,
         Err(e) => return emit_error(&e),
     };
-    if let Some(code) = save_after_validate(&song, &args.path, common) {
-        return code;
-    }
+    let warnings = match save_after_validate(&song, &args.path, common) {
+        Ok(w) => w,
+        Err(code) => return code,
+    };
     if !common.quiet {
         eprintln!("[OK] Set {count} fx on track '{}'", args.track);
     }
-    emit_json(&json!({ "ok": true, "track_id": args.track, "fx_count": count }));
+    emit_json(&with_warnings(
+        json!({ "ok": true, "track_id": args.track, "fx_count": count }),
+        &warnings,
+    ));
     0
 }
 
@@ -646,21 +709,25 @@ fn cmd_edit_notes(args: EditNotesArgs, common: &CommonOpts) -> u8 {
         Ok(s) => s,
         Err(e) => return emit_error(&e),
     };
-    if let Some(code) = save_after_validate(&song, &args.path, common) {
-        return code;
-    }
+    let warnings = match save_after_validate(&song, &args.path, common) {
+        Ok(w) => w,
+        Err(code) => return code,
+    };
     if !common.quiet {
         eprintln!(
             "[OK] Applied {} op(s) on '{}' ({} note-touches)",
             stats.ops_applied, args.track, stats.notes_affected
         );
     }
-    emit_json(&json!({
-        "ok": true,
-        "track_id": args.track,
-        "ops_applied": stats.ops_applied,
-        "notes_affected": stats.notes_affected,
-    }));
+    emit_json(&with_warnings(
+        json!({
+            "ok": true,
+            "track_id": args.track,
+            "ops_applied": stats.ops_applied,
+            "notes_affected": stats.notes_affected,
+        }),
+        &warnings,
+    ));
     0
 }
 
@@ -1084,20 +1151,59 @@ fn load_notes(json_str: Option<&str>, file: Option<&Path>) -> Result<Vec<Note>, 
 }
 
 /// 編集後の Song を validate し、 OK なら force 上書き保存する。
-/// 失敗時の exit code を `Some(code)` で返し、 成功時は `None`。
-fn save_after_validate(song: &Song, path: &Path, common: &CommonOpts) -> Option<u8> {
-    let verrs = core::validate(song);
-    if !verrs.is_empty() {
+/// 失敗時は `Err(exit_code)`、 成功時は `Ok(warnings)` (Warning 級のみ、 caller の JSON 出力に乗せる)。
+/// warnings は保存をブロックしない。
+fn save_after_validate(
+    song: &Song,
+    path: &Path,
+    common: &CommonOpts,
+) -> Result<Vec<ValidationError>, u8> {
+    let (errors, warnings) = partition_validation(core::validate(song));
+    if !errors.is_empty() {
         if !common.quiet {
-            eprintln!("[ERROR] {} validation error(s) after edit", verrs.len());
+            eprintln!(
+                "[ERROR] {} error(s), {} warning(s) after edit",
+                errors.len(),
+                warnings.len()
+            );
         }
-        emit_json(&json!({ "ok": false, "errors": verrs }));
-        return Some(1);
+        emit_json(&validation_payload(false, &errors, &warnings));
+        return Err(1);
+    }
+    if !warnings.is_empty() && !common.quiet {
+        eprintln!("[WARN] {} warning(s) after edit", warnings.len());
     }
     if let Err(e) = core::save(song, path, true) {
-        return Some(emit_error(&e));
+        return Err(emit_error(&e));
     }
-    None
+    Ok(warnings)
+}
+
+/// `Ok` payload に warnings 配列を追加 (空なら無加工)。
+fn with_warnings(mut payload: Value, warnings: &[ValidationError]) -> Value {
+    if !warnings.is_empty() {
+        payload["warnings"] = json!(warnings);
+    }
+    payload
+}
+
+/// validate 結果を Error 級 と Warning 級 に分割。
+fn partition_validation(
+    issues: Vec<ValidationError>,
+) -> (Vec<ValidationError>, Vec<ValidationError>) {
+    issues.into_iter().partition(ValidationError::is_error)
+}
+
+/// 検証結果から CLI JSON payload を組み立てる。 warnings は非空のときだけ含める。
+fn validation_payload(ok: bool, errors: &[ValidationError], warnings: &[ValidationError]) -> Value {
+    let mut payload = json!({ "ok": ok });
+    if !errors.is_empty() {
+        payload["errors"] = json!(errors);
+    }
+    if !warnings.is_empty() {
+        payload["warnings"] = json!(warnings);
+    }
+    payload
 }
 
 /// stdout に 1 行 JSON で書き出す (改行付き)。
@@ -1128,11 +1234,9 @@ fn emit_error(e: &CodettaError) -> u8 {
             1,
             format!("unsupported schema version: {v:?}"),
         ),
-        CodettaError::TrackNotFound(id) => (
-            "TRACK_NOT_FOUND",
-            1,
-            format!("track not found: {id:?}"),
-        ),
+        CodettaError::TrackNotFound(id) => {
+            ("TRACK_NOT_FOUND", 1, format!("track not found: {id:?}"))
+        }
         CodettaError::TrackIdDuplicate(id) => (
             "TRACK_ID_DUPLICATE",
             1,
@@ -1175,7 +1279,14 @@ mod tests {
                 !desc.contains("catalog entry missing"),
                 "placeholder description for {t}: {desc}"
             );
-            assert_eq!(catalog.iter().filter(|e| e["type"].as_str() == Some(t)).count(), 1, "duplicate entry for {t}");
+            assert_eq!(
+                catalog
+                    .iter()
+                    .filter(|e| e["type"].as_str() == Some(t))
+                    .count(),
+                1,
+                "duplicate entry for {t}"
+            );
         }
         assert_eq!(catalog.len(), KNOWN_INSTRUMENT_TYPES.len());
     }
@@ -1203,6 +1314,30 @@ mod tests {
     }
 
     #[test]
+    fn catalog_params_match_instrument_param_keys() {
+        // catalog の params キー集合 と validate 側 instrument_param_keys が一致することを保証。
+        // どちらかを更新したらもう一方も更新する必要があり、 これが落ちたら同期漏れ。
+        use codetta_core::validate::instrument_param_keys;
+        use std::collections::HashSet;
+
+        let catalog = instrument_catalog();
+        for entry in &catalog {
+            let kind = entry["type"].as_str().expect("type field");
+            let params = entry["params"].as_object().expect("params field");
+            let catalog_keys: HashSet<&str> = params.keys().map(String::as_str).collect();
+            let known: HashSet<&str> = instrument_param_keys(kind)
+                .unwrap_or_else(|| panic!("instrument_param_keys missing entry for {kind:?}"))
+                .iter()
+                .copied()
+                .collect();
+            assert_eq!(
+                catalog_keys, known,
+                "params mismatch for {kind:?}: catalog={catalog_keys:?} vs validate={known:?}"
+            );
+        }
+    }
+
+    #[test]
     fn drum_kit_entry_lists_all_drum_keys() {
         let catalog = instrument_catalog();
         let drum = catalog
@@ -1223,13 +1358,12 @@ mod tests {
     #[test]
     fn schema_has_expected_top_level_defs() {
         let schema = song_json_schema();
-        let defs = schema["$defs"]
-            .as_object()
-            .expect("schema $defs");
-        for required in [
-            "Metadata", "Track", "Instrument", "Effect", "Note", "Pitch",
-        ] {
-            assert!(defs.contains_key(required), "schema missing $defs.{required}");
+        let defs = schema["$defs"].as_object().expect("schema $defs");
+        for required in ["Metadata", "Track", "Instrument", "Effect", "Note", "Pitch"] {
+            assert!(
+                defs.contains_key(required),
+                "schema missing $defs.{required}"
+            );
         }
         // top level
         assert_eq!(schema["type"].as_str(), Some("object"));
