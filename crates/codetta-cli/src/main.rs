@@ -750,6 +750,30 @@ fn instrument_catalog() -> Vec<Value> {
                 },
                 "drum_keys": KNOWN_DRUM_KEYS,
             }),
+            "soundfont" => json!({
+                "type": "soundfont",
+                "category": "sampler",
+                "description": "外部 SoundFont (.sf2) ファイル経由のサンプラ。 生楽器 / GM 互換音色用 (07-soundfont.md)。 file は絶対 path か $CODETTA_SOUNDFONT_DIR (default ~/Music/sf2/) からの相対 path",
+                "params": {
+                    "file": {
+                        "type": "string",
+                        "required": true,
+                        "note": "SF2 ファイル path (絶対 or $CODETTA_SOUNDFONT_DIR 配下の相対)",
+                    },
+                    "preset": {
+                        "type": "integer",
+                        "default": 0,
+                        "range": [0, 127],
+                        "note": "GM Program 番号 (0 = Acoustic Grand Piano、 24 = Acoustic Guitar(nylon) など)",
+                    },
+                    "bank": {
+                        "type": "integer",
+                        "default": 0,
+                        "range": [0, 128],
+                        "note": "GM/GS bank (melodic は 0、 GS Drum は 128)",
+                    },
+                },
+            }),
             _ => json!({
                 "type": t,
                 "category": "unknown",

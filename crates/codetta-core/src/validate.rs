@@ -2,6 +2,7 @@ use std::collections::HashSet;
 
 use crate::error::ValidationError;
 use crate::model::{Pitch, Song};
+use crate::synth::soundfont::{resolve_soundfont_path, SoundFontParams};
 
 /// 既知のシンセ / ドラム楽器 type。
 pub const KNOWN_INSTRUMENT_TYPES: &[&str] = &[
@@ -13,6 +14,7 @@ pub const KNOWN_INSTRUMENT_TYPES: &[&str] = &[
     "triangle",
     "saw_pad",
     "drum_kit",
+    "soundfont",
 ];
 
 /// 既知のエフェクト type (Phase 0)。
@@ -101,6 +103,31 @@ pub fn validate(song: &Song) -> Vec<ValidationError> {
             ));
         }
         let is_drum = track.instrument.kind == "drum_kit";
+
+        // soundfont params: file/preset/bank の型 + 解決後 path の存在を確認
+        if track.instrument.kind == "soundfont" {
+            match SoundFontParams::from_params(&track.instrument.params) {
+                Err(e) => errors.push(ValidationError::new(
+                    "INVALID_SCHEMA",
+                    format!("{tprefix}.instrument.params"),
+                    e.to_string(),
+                )),
+                Ok(sf) => {
+                    let resolved = resolve_soundfont_path(&sf.file);
+                    if !resolved.exists() {
+                        errors.push(ValidationError::new(
+                            "SOUNDFONT_FILE_NOT_FOUND",
+                            format!("{tprefix}.instrument.params.file"),
+                            format!(
+                                "soundfont file not found: {} (resolved from {:?}, set $CODETTA_SOUNDFONT_DIR or use absolute path)",
+                                resolved.display(),
+                                sf.file
+                            ),
+                        ));
+                    }
+                }
+            }
+        }
 
         // effects
         for (fi, fx) in track.fx.iter().enumerate() {
@@ -276,6 +303,27 @@ mod tests {
         // 正しい drum key なら通る
         s.tracks[0].notes[0].pitch = Pitch::Name("kick".into());
         assert!(validate(&s).is_empty());
+    }
+
+    #[test]
+    fn soundfont_track_requires_file_param() {
+        let mut s = ok_song();
+        s.tracks[0].instrument = Instrument::new("soundfont");
+        let errs = validate(&s);
+        assert!(errs.iter().any(|e|
+            e.code == "INVALID_SCHEMA" && e.path.ends_with(".instrument.params")
+        ), "expected missing-file error, got: {errs:?}");
+    }
+
+    #[test]
+    fn soundfont_track_reports_missing_file() {
+        let mut s = ok_song();
+        let mut inst = Instrument::new("soundfont");
+        inst.params.insert("file".into(), serde_json::json!("/nonexistent/codetta-test/abs.sf2"));
+        s.tracks[0].instrument = inst;
+        let errs = validate(&s);
+        assert!(errs.iter().any(|e| e.code == "SOUNDFONT_FILE_NOT_FOUND"),
+            "expected SOUNDFONT_FILE_NOT_FOUND, got: {errs:?}");
     }
 
     #[test]
