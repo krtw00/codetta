@@ -129,18 +129,31 @@ async function callTool(name, args) {
     "[ok] resources/templates/list ->",
     templates.map((t) => t.uriTemplate),
   );
-  assert(
-    templates.some((t) => t.uriTemplate === "codetta://presets/{name}"),
-    "presets template not registered",
-  );
+  for (const expectedTmpl of [
+    "codetta://presets/{name}",
+    "codetta://schema/song/{version}",
+    "codetta://songs/{name}",
+  ]) {
+    assert(
+      templates.some((t) => t.uriTemplate === expectedTmpl),
+      `template ${expectedTmpl} not registered`,
+    );
+  }
 
   const res = await send("resources/list", {});
-  const presets = (res.result?.resources ?? []).map((r) => r.uri).sort();
-  console.log("[ok] resources/list ->", presets);
-  assert(
-    presets.includes("codetta://presets/cyber-lead"),
-    "expected preset cyber-lead in resources/list",
-  );
+  const resourceUris = (res.result?.resources ?? []).map((r) => r.uri).sort();
+  console.log("[ok] resources/list ->", resourceUris);
+  for (const expectedUri of [
+    "codetta://presets/cyber-lead",
+    "codetta://instruments",
+    "codetta://effects",
+    "codetta://schema/song/0.1",
+  ]) {
+    assert(
+      resourceUris.includes(expectedUri),
+      `expected resource ${expectedUri} in resources/list`,
+    );
+  }
 
   // catalog tools
   const li = await callTool("list_instruments", {});
@@ -157,18 +170,62 @@ async function callTool(name, args) {
   );
   console.log("[ok] list_effects ->", `${le.effects.length} effects`);
 
-  // read a preset resource
-  const rr = await send("resources/read", {
-    uri: "codetta://presets/cyber-lead",
-  });
-  const contents = rr.result?.contents ?? [];
-  assert(contents.length === 1, "expected 1 content");
-  assert(
-    contents[0].mimeType === "application/json",
-    "wrong mimeType",
+  // resource: presets/cyber-lead
+  async function readResource(uri, expectedMime) {
+    const r = await send("resources/read", { uri });
+    const cs = r.result?.contents ?? [];
+    assert(cs.length === 1, `${uri}: expected 1 content`);
+    assert(
+      cs[0].mimeType === expectedMime,
+      `${uri}: mimeType ${cs[0].mimeType} != ${expectedMime}`,
+    );
+    assert(typeof cs[0].text === "string" && cs[0].text.length > 0, `${uri}: empty text`);
+    return cs[0].text;
+  }
+
+  const presetText = await readResource(
+    "codetta://presets/cyber-lead",
+    "application/json",
   );
-  const preview = contents[0].text?.slice(0, 60).replace(/\n/g, " ");
-  console.log("[ok] resources/read ->", preview, "...");
+  console.log("[ok] resources/read presets/cyber-lead ->", presetText.slice(0, 60).replace(/\n/g, " "), "...");
+
+  // resource: instruments / effects (catalog)
+  const instrText = await readResource("codetta://instruments", "application/json");
+  const instrPayload = JSON.parse(instrText);
+  assert(
+    Array.isArray(instrPayload.instruments) && instrPayload.instruments.length > 0,
+    "instruments resource empty",
+  );
+  assert(instrPayload.ok === undefined, "instruments resource should not include ok wrapper");
+  console.log("[ok] resources/read instruments ->", `${instrPayload.instruments.length} instruments`);
+
+  const fxText = await readResource("codetta://effects", "application/json");
+  const fxPayload = JSON.parse(fxText);
+  assert(
+    Array.isArray(fxPayload.effects) && fxPayload.effects.length > 0,
+    "effects resource empty",
+  );
+  console.log("[ok] resources/read effects ->", `${fxPayload.effects.length} effects`);
+
+  // resource: schema/song/0.1
+  const schemaText = await readResource(
+    "codetta://schema/song/0.1",
+    "application/schema+json",
+  );
+  const schemaPayload = JSON.parse(schemaText);
+  assert(
+    typeof schemaPayload.$id === "string" && schemaPayload.$id.includes("song"),
+    "schema resource missing $id",
+  );
+  assert(schemaPayload.title === "Codetta Song", "schema title mismatch");
+  console.log("[ok] resources/read schema/song/0.1 ->", schemaPayload.$id);
+
+  // resource: schema with unknown version should fail
+  {
+    const r = await send("resources/read", { uri: "codetta://schema/song/9.9" });
+    assert(r.error != null, "expected error for unknown schema version");
+    console.log("[ok] resources/read schema/song/9.9 -> rejected");
+  }
 
   // ----- golden path: MCP のみで完結 -----
   const songName = "smoke-test.codetta";
@@ -293,6 +350,33 @@ async function callTool(name, args) {
   );
   console.log("[ok] list_songs ->", `${ls.songs.length} song(s)`);
 
+  // resource: codetta://songs/{name} — workspace 内の .codetta を生 JSON で読む
+  // resources/list で smoke-test が拾われていることも確認
+  const res2 = await send("resources/list", {});
+  const allResources = (res2.result?.resources ?? []).map((r) => r.uri);
+  assert(
+    allResources.includes("codetta://songs/smoke-test"),
+    `expected codetta://songs/smoke-test in resources/list, got ${JSON.stringify(allResources)}`,
+  );
+  const songText = await readResource(
+    "codetta://songs/smoke-test",
+    "application/json",
+  );
+  const songJson = JSON.parse(songText);
+  assert(songJson.version === "0.1", "song resource missing version");
+  assert(Array.isArray(songJson.tracks) && songJson.tracks.length === 2, "song resource tracks mismatch");
+  const songLead = songJson.tracks.find((t) => t.id === "lead");
+  assert(songLead?.instrument?.type === "saw_lead", "song resource lead instrument mismatch");
+  assert(Array.isArray(songLead?.notes) && songLead.notes.length === 4, "song resource lead notes mismatch");
+  console.log("[ok] resources/read songs/smoke-test -> v0.1, 2 tracks, lead notes intact");
+
+  // resource: 存在しない song はエラー
+  {
+    const r = await send("resources/read", { uri: "codetta://songs/no-such-song" });
+    assert(r.error != null, "expected error for missing song");
+    console.log("[ok] resources/read songs/no-such-song -> rejected");
+  }
+
   // render_wav
   const renderStruct = await callTool("render_wav", { path: songName });
   assert(
@@ -323,7 +407,7 @@ async function callTool(name, args) {
   assert(info2.tracks.length === 1, `tracks != 1 after remove_track (got ${info2.tracks.length})`);
   console.log("[ok] remove_track drum -> 1 track remaining");
 
-  console.log("\nAll smoke checks passed (15 tools + 2 resource endpoints).");
+  console.log("\nAll smoke checks passed (15 tools + 5 resource endpoints).");
   child.kill();
   process.exit(0);
 })().catch((e) => {
