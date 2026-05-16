@@ -6,9 +6,53 @@
 //! Envelope 曲線は線形セグメント。 sound.md は「指数」を最終形と書いているが、
 //! Phase 0 first cut は線形で十分音になる (差し替えは Phase 1+)。
 
-use std::f32::consts::TAU;
+use std::f32::consts::{PI, TAU};
 
 use super::{AdsrParams, SAMPLE_RATE};
+
+/// 決定論的 xorshift32 (drum voice の noise 用)。 同じ seed で常に同じ noise を返すので、
+/// テストで波形を比較できる。
+struct Xorshift32 {
+    state: u32,
+}
+
+impl Xorshift32 {
+    fn new(seed: u32) -> Self {
+        Self {
+            state: seed.max(1),
+        }
+    }
+    fn next_u32(&mut self) -> u32 {
+        let mut x = self.state;
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        self.state = x;
+        x
+    }
+    /// -1.0..1.0 の white noise。
+    fn noise(&mut self) -> f32 {
+        (self.next_u32() as f32 / u32::MAX as f32) * 2.0 - 1.0
+    }
+}
+
+/// 1 極 IIR highpass を 1 サンプルだけ進める (RC ハイパス相当)。
+/// `state.0` は直前の入力、 `state.1` は直前の出力。
+fn one_pole_highpass_tick(state: &mut (f32, f32), input: f32, cutoff_hz: f32, sr: f32) -> f32 {
+    let alpha = 2.0 * PI * cutoff_hz / sr;
+    let a = 1.0 / (1.0 + alpha);
+    let out = a * (state.1 + input - state.0);
+    state.0 = input;
+    state.1 = out;
+    out
+}
+
+/// 1 極 IIR lowpass を 1 サンプルだけ進める。 `state` は直前の出力。
+fn one_pole_lowpass_tick(state: &mut f32, input: f32, cutoff_hz: f32, sr: f32) -> f32 {
+    let alpha = (2.0 * PI * cutoff_hz / sr).min(1.0);
+    *state += alpha * (input - *state);
+    *state
+}
 
 /// 1 ノート分の ADSR 包絡 (hold + release) を生成する。
 ///
@@ -174,6 +218,246 @@ pub fn render_voice_saw_pad(
             }
         }
         out.push((y / 3.0) * e);
+    }
+    out
+}
+
+/// 1 ノート分の kick (バスドラム) を生成する。 sin の pitch sweep + amp envelope + click noise。
+///
+/// `kit` で `808` / `909` 系のバリエーションに切り替え可能 (sound.md 仕様)。
+/// 不明 / 未指定なら `default` レシピ。 波形長は kit ごとの amp_decay + 50ms tail で自然消滅する。
+///
+/// note の velocity は呼び出し側 (render) で乗算するので、 ここではピーク 1.0 近辺の波形を返す。
+pub fn render_drum_kick(kit: Option<&str>) -> Vec<f32> {
+    let sr = SAMPLE_RATE as f32;
+    // (f_start, f_end, pitch_decay_sec, amp_decay_sec, click_gain)
+    let (f_start, f_end, pitch_decay, amp_decay, click_gain) = match kit.unwrap_or("default") {
+        "808" => (80.0_f32, 40.0_f32, 0.1_f32, 0.4_f32, 0.1_f32),
+        "909" => (200.0_f32, 60.0_f32, 0.04_f32, 0.2_f32, 0.4_f32),
+        _ => (150.0_f32, 50.0_f32, 0.05_f32, 0.2_f32, 0.25_f32),
+    };
+    let total = ((amp_decay + 0.05) * sr) as usize;
+    let mut out = Vec::with_capacity(total);
+    let mut phase = 0.0_f32;
+    let mut rng = Xorshift32::new(0xDEAD_BEEF);
+    let click_samples = (0.005 * sr) as usize;
+    let attack_samples = ((0.001 * sr) as usize).max(1);
+    let amp_tau = amp_decay / 3.0; // 3 倍の時定数で ~5% まで減衰
+    for i in 0..total {
+        let t = i as f32 / sr;
+        let pitch_env = (-t / pitch_decay).exp();
+        let freq = f_end + (f_start - f_end) * pitch_env;
+        phase += TAU * freq / sr;
+        if phase > TAU {
+            phase -= TAU;
+        }
+        let sin = phase.sin();
+        let amp = if i < attack_samples {
+            i as f32 / attack_samples as f32
+        } else {
+            (-(t - attack_samples as f32 / sr) / amp_tau).exp()
+        };
+        let click = if i < click_samples {
+            rng.noise() * click_gain * (1.0 - i as f32 / click_samples as f32)
+        } else {
+            0.0
+        };
+        out.push(((sin * amp) + click).clamp(-1.0, 1.0));
+    }
+    out
+}
+
+/// 1 ノート分の snare (スネア) を生成する。 sin 200Hz + bandpass された noise の合成。
+///
+/// bandpass は 1 極 highpass (1.5kHz) + 1 極 lowpass (4kHz) を直列にした簡易版。
+/// `kit` で `808` (sin 主体、 長め) / `909` (noise 主体、 短め) に切り替え。
+pub fn render_drum_snare(kit: Option<&str>) -> Vec<f32> {
+    let sr = SAMPLE_RATE as f32;
+    let (sin_gain, noise_gain, decay) = match kit.unwrap_or("default") {
+        "808" => (0.7_f32, 0.4_f32, 0.25_f32),
+        "909" => (0.4_f32, 0.8_f32, 0.12_f32),
+        _ => (0.5_f32, 0.6_f32, 0.15_f32),
+    };
+    let total = ((decay + 0.05) * sr) as usize;
+    let mut out = Vec::with_capacity(total);
+    let mut phase = 0.0_f32;
+    let sin_inc = TAU * 200.0 / sr;
+    let mut rng = Xorshift32::new(0xCAFE_BABE);
+    let mut hp = (0.0_f32, 0.0_f32);
+    let mut lp = 0.0_f32;
+    let attack_samples = ((0.001 * sr) as usize).max(1);
+    let amp_tau = decay / 3.0;
+    for i in 0..total {
+        phase += sin_inc;
+        if phase > TAU {
+            phase -= TAU;
+        }
+        let sin = phase.sin();
+        let raw_noise = rng.noise();
+        let hp_out = one_pole_highpass_tick(&mut hp, raw_noise, 1500.0, sr);
+        let bp = one_pole_lowpass_tick(&mut lp, hp_out, 4000.0, sr);
+        let t = i as f32 / sr;
+        let amp = if i < attack_samples {
+            i as f32 / attack_samples as f32
+        } else {
+            (-(t - attack_samples as f32 / sr) / amp_tau).exp()
+        };
+        out.push(((sin * sin_gain + bp * noise_gain) * amp).clamp(-1.0, 1.0));
+    }
+    out
+}
+
+/// 1 ノート分のハイハットを生成する。 highpass 6kHz された white noise + amp envelope。
+/// `open=false` で closed (50ms decay)、 `open=true` で open (500ms decay)。
+pub fn render_drum_hh(open: bool) -> Vec<f32> {
+    let sr = SAMPLE_RATE as f32;
+    let decay = if open { 0.5 } else { 0.05 };
+    let total = ((decay + 0.05) * sr) as usize;
+    let mut out = Vec::with_capacity(total);
+    let mut rng = Xorshift32::new(if open { 0x1234_5678 } else { 0x8765_4321 });
+    let mut hp = (0.0_f32, 0.0_f32);
+    let attack_samples = ((0.001 * sr) as usize).max(1);
+    let amp_tau = decay / 3.0;
+    for i in 0..total {
+        let raw = rng.noise();
+        let h = one_pole_highpass_tick(&mut hp, raw, 6000.0, sr);
+        let t = i as f32 / sr;
+        let amp = if i < attack_samples {
+            i as f32 / attack_samples as f32
+        } else {
+            (-(t - attack_samples as f32 / sr) / amp_tau).exp()
+        };
+        out.push((h * amp).clamp(-1.0, 1.0));
+    }
+    out
+}
+
+/// 1 ノート分の clap を生成する。 bandpass noise を 4 連バーストで重ねた典型的なリズムマシン clap。
+pub fn render_drum_clap() -> Vec<f32> {
+    let sr = SAMPLE_RATE as f32;
+    let total_sec = 0.3_f32;
+    let total = (total_sec * sr) as usize;
+    let mut out = Vec::with_capacity(total);
+    let mut rng = Xorshift32::new(0x00C0_FFEE);
+    let mut hp = (0.0_f32, 0.0_f32);
+    let mut lp = 0.0_f32;
+    // 短い 4 バースト @ 0/10/20/30ms + 全体に長めの tail
+    let burst_offsets_sec = [0.0_f32, 0.010, 0.020, 0.030];
+    let burst_tau = 0.008_f32;
+    let tail_tau = 0.05_f32;
+    for i in 0..total {
+        let raw = rng.noise();
+        let hp_out = one_pole_highpass_tick(&mut hp, raw, 1500.0, sr);
+        let bp = one_pole_lowpass_tick(&mut lp, hp_out, 4000.0, sr);
+        let t = i as f32 / sr;
+        let mut burst_env = 0.0_f32;
+        for &off in &burst_offsets_sec {
+            if t >= off {
+                burst_env += (-(t - off) / burst_tau).exp();
+            }
+        }
+        let tail_env = (-t / tail_tau).exp();
+        let amp = (burst_env * 0.4 + tail_env * 0.3).min(1.0);
+        out.push((bp * amp).clamp(-1.0, 1.0));
+    }
+    out
+}
+
+/// 1 ノート分の crash を生成する。 bandpass (4-10kHz) noise + 長い decay (2s)。
+pub fn render_drum_crash() -> Vec<f32> {
+    let sr = SAMPLE_RATE as f32;
+    let decay = 2.0_f32;
+    let total = ((decay + 0.1) * sr) as usize;
+    let mut out = Vec::with_capacity(total);
+    let mut rng = Xorshift32::new(0xCABA_DAFE);
+    let mut hp = (0.0_f32, 0.0_f32);
+    let mut lp = 0.0_f32;
+    let attack_samples = ((0.005 * sr) as usize).max(1);
+    let amp_tau = decay / 3.0;
+    for i in 0..total {
+        let raw = rng.noise();
+        let hp_out = one_pole_highpass_tick(&mut hp, raw, 4000.0, sr);
+        let bp = one_pole_lowpass_tick(&mut lp, hp_out, 10000.0, sr);
+        let t = i as f32 / sr;
+        let amp = if i < attack_samples {
+            i as f32 / attack_samples as f32
+        } else {
+            (-(t - attack_samples as f32 / sr) / amp_tau).exp()
+        };
+        out.push((bp * amp).clamp(-1.0, 1.0));
+    }
+    out
+}
+
+/// 1 ノート分の ride を生成する。 bandpass (5-8kHz) noise + 中程度の decay (1s) + sin 800Hz の ping。
+pub fn render_drum_ride() -> Vec<f32> {
+    let sr = SAMPLE_RATE as f32;
+    let decay = 1.0_f32;
+    let total = ((decay + 0.1) * sr) as usize;
+    let mut out = Vec::with_capacity(total);
+    let mut rng = Xorshift32::new(0xFADE_C0DE);
+    let mut hp = (0.0_f32, 0.0_f32);
+    let mut lp = 0.0_f32;
+    let attack_samples = ((0.002 * sr) as usize).max(1);
+    let amp_tau = decay / 3.0;
+    let mut phase = 0.0_f32;
+    let ping_inc = TAU * 800.0 / sr;
+    let ping_tau = 0.04_f32;
+    for i in 0..total {
+        let raw = rng.noise();
+        let hp_out = one_pole_highpass_tick(&mut hp, raw, 5000.0, sr);
+        let bp = one_pole_lowpass_tick(&mut lp, hp_out, 8000.0, sr);
+        phase += ping_inc;
+        if phase > TAU {
+            phase -= TAU;
+        }
+        let t = i as f32 / sr;
+        let amp = if i < attack_samples {
+            i as f32 / attack_samples as f32
+        } else {
+            (-(t - attack_samples as f32 / sr) / amp_tau).exp()
+        };
+        let ping_env = (-t / ping_tau).exp();
+        out.push(((bp * 0.7 + phase.sin() * ping_env * 0.3) * amp).clamp(-1.0, 1.0));
+    }
+    out
+}
+
+/// 1 ノート分の tom を生成する。 sin の pitch sweep + 短い click noise。
+/// `base_freq_hz` で lo/mid/hi の音高差を作る (80/150/220 Hz 推奨)。
+pub fn render_drum_tom(base_freq_hz: f32) -> Vec<f32> {
+    let sr = SAMPLE_RATE as f32;
+    let decay = 0.4_f32;
+    let total = ((decay + 0.05) * sr) as usize;
+    let mut out = Vec::with_capacity(total);
+    let mut phase = 0.0_f32;
+    let mut rng = Xorshift32::new(0x704D_F00D);
+    let f_start = base_freq_hz * 1.5;
+    let f_end = base_freq_hz;
+    let pitch_decay = 0.03_f32;
+    let click_samples = (0.003 * sr) as usize;
+    let attack_samples = ((0.001 * sr) as usize).max(1);
+    let amp_tau = decay / 3.0;
+    for i in 0..total {
+        let t = i as f32 / sr;
+        let pitch_env = (-t / pitch_decay).exp();
+        let freq = f_end + (f_start - f_end) * pitch_env;
+        phase += TAU * freq / sr;
+        if phase > TAU {
+            phase -= TAU;
+        }
+        let sin = phase.sin();
+        let click = if i < click_samples {
+            rng.noise() * 0.3 * (1.0 - i as f32 / click_samples as f32)
+        } else {
+            0.0
+        };
+        let amp = if i < attack_samples {
+            i as f32 / attack_samples as f32
+        } else {
+            (-(t - attack_samples as f32 / sr) / amp_tau).exp()
+        };
+        out.push(((sin + click) * amp).clamp(-1.0, 1.0));
     }
     out
 }
@@ -442,5 +726,108 @@ mod tests {
         // 極端な pulse_width でも両極に振れていれば clamp が効いている
         assert!(span_narrow > 1.0, "narrow pulse too small: {span_narrow}");
         assert!(span_wide > 1.0, "wide pulse too small: {span_wide}");
+    }
+
+    // drum_kit: 「振幅が ±1 内 + 各 voice が無音にならない + 異なる drum_key で違う波形」 の 3 軸テスト。
+    // 音色の良し悪し (RT60 / spectrum) は耳テスト前提なので、 機械的に確認できる範囲だけにとどめる。
+
+    fn span(v: &[f32]) -> f32 {
+        v.iter().cloned().fold(0.0_f32, f32::max) - v.iter().cloned().fold(0.0_f32, f32::min)
+    }
+
+    fn peak(v: &[f32]) -> f32 {
+        v.iter().map(|x| x.abs()).fold(0.0_f32, f32::max)
+    }
+
+    #[test]
+    fn drum_kick_produces_audio_and_stays_bounded() {
+        let v = render_drum_kick(None);
+        assert!(!v.is_empty());
+        let p = peak(&v);
+        assert!(p > 0.3, "kick should be audible: {p}");
+        assert!(p <= 1.0, "kick should stay bounded: {p}");
+    }
+
+    #[test]
+    fn drum_kick_kit_variations_produce_distinct_lengths() {
+        let d = render_drum_kick(None);
+        let a808 = render_drum_kick(Some("808"));
+        let a909 = render_drum_kick(Some("909"));
+        // 808 は decay 400ms で最も長く、 909 は 200ms、 default は 200ms
+        assert!(a808.len() > d.len(), "808 should be longer than default: 808={} default={}", a808.len(), d.len());
+        assert_eq!(a909.len(), d.len(), "909 and default share 200ms decay, lengths should match");
+    }
+
+    #[test]
+    fn drum_snare_produces_audio_and_stays_bounded() {
+        let v = render_drum_snare(None);
+        let p = peak(&v);
+        assert!(p > 0.2, "snare should be audible: {p}");
+        assert!(p <= 1.0, "snare should stay bounded: {p}");
+    }
+
+    #[test]
+    fn drum_hh_closed_is_shorter_than_open() {
+        let closed = render_drum_hh(false);
+        let open = render_drum_hh(true);
+        assert!(open.len() > closed.len() * 5, "open hh should be ~10x longer than closed: closed={} open={}", closed.len(), open.len());
+        assert!(peak(&closed) > 0.1 && peak(&closed) <= 1.0);
+        assert!(peak(&open) > 0.1 && peak(&open) <= 1.0);
+    }
+
+    #[test]
+    fn drum_clap_crash_ride_each_make_sound() {
+        for (name, v) in [
+            ("clap", render_drum_clap()),
+            ("crash", render_drum_crash()),
+            ("ride", render_drum_ride()),
+        ] {
+            let p = peak(&v);
+            assert!(p > 0.1, "{name} should be audible: {p}");
+            assert!(p <= 1.0, "{name} should stay bounded: {p}");
+        }
+    }
+
+    #[test]
+    fn drum_tom_pitch_distinguishes_lo_mid_hi() {
+        // 同じ duration だが波形は周波数で異なる
+        let lo = render_drum_tom(80.0);
+        let mid = render_drum_tom(150.0);
+        let hi = render_drum_tom(220.0);
+        assert_eq!(lo.len(), mid.len());
+        assert_eq!(mid.len(), hi.len());
+        // 波形が一致しないこと (= 違う freq で違う sin が出ている)
+        let diff_lo_hi: usize = lo
+            .iter()
+            .zip(hi.iter())
+            .filter(|(a, b)| (*a - *b).abs() > 0.01)
+            .count();
+        assert!(diff_lo_hi > 100, "lo and hi toms should differ: diff={diff_lo_hi}");
+        for v in [&lo, &mid, &hi] {
+            assert!(peak(v) > 0.2 && peak(v) <= 1.0);
+        }
+    }
+
+    #[test]
+    fn drum_voices_have_finite_tail() {
+        // どの voice も末尾近辺で減衰している (= 自然消滅する)
+        for (name, v) in [
+            ("kick", render_drum_kick(None)),
+            ("snare", render_drum_snare(None)),
+            ("hh_closed", render_drum_hh(false)),
+            ("crash", render_drum_crash()),
+            ("tom_lo", render_drum_tom(80.0)),
+        ] {
+            let tail_start = v.len().saturating_sub(SAMPLE_RATE as usize / 200); // 末尾 5ms
+            let tail = &v[tail_start..];
+            let head_peak = peak(&v[..v.len() / 2]);
+            let tail_peak = peak(tail);
+            assert!(
+                tail_peak < head_peak * 0.5,
+                "{name} tail should be quieter than head: head={head_peak} tail={tail_peak}"
+            );
+        }
+        // 上で使った span は dead code 警告回避のため touch
+        let _ = span(&render_drum_kick(None));
     }
 }
