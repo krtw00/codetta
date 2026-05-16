@@ -20,6 +20,10 @@ use hound::{SampleFormat, WavSpec, WavWriter};
 use crate::effect;
 use crate::error::CodettaError;
 use crate::model::{Effect, Song};
+use crate::synth::soundfont::{
+    render_soundfont_track, resolve_soundfont_path, SoundFontParams, SoundFontTrackNote,
+    SoundFontTrackRender,
+};
 use crate::synth::{manual, midi_to_freq, AdsrParams, SAMPLE_RATE};
 
 /// Song を WAV ファイルに書き出す。 出力時の経過秒数 (実時間) は返さない —
@@ -71,7 +75,65 @@ pub fn render_to_buffer(song: &Song) -> Vec<(f32, f32)> {
         // per-track buffer に書き出し
         let mut track_buf = vec![(0.0_f32, 0.0_f32); total_samples];
 
-        if kind == "drum_kit" {
+        if kind == "soundfont" {
+            // SF2 は per-voice 独立 render ができないので track 単位で Synthesizer を生成し、
+            // note_on/note_off/render を時刻順に駆動して stereo PCM を取り出す。
+            let sf_params = match SoundFontParams::from_params(&track.instrument.params) {
+                Ok(p) => p,
+                Err(_) => continue, // validate 側で報告済み
+            };
+            let resolved = resolve_soundfont_path(&sf_params.file);
+            let mut notes: Vec<SoundFontTrackNote> = track
+                .notes
+                .iter()
+                .filter_map(|n| {
+                    let midi = n.pitch.as_midi().ok()?;
+                    let start = (n.t * sec_per_beat * sr) as usize;
+                    let end_beat = n.t + n.dur;
+                    let end = (end_beat * sec_per_beat * sr) as usize;
+                    if end <= start {
+                        return None;
+                    }
+                    Some(SoundFontTrackNote {
+                        start_sample: start,
+                        end_sample: end,
+                        midi_key: midi,
+                        velocity: n.vel,
+                    })
+                })
+                .collect();
+            notes.sort_by_key(|n| n.start_sample);
+
+            let cfg = SoundFontTrackRender {
+                sf2_path: resolved,
+                preset: sf_params.preset,
+                bank: sf_params.bank,
+                sample_rate: SAMPLE_RATE,
+                total_samples,
+                notes,
+            };
+            match render_soundfont_track(&cfg) {
+                Ok(stereo) => {
+                    // velocity は SF2 内部で note_on velocity として既に効いている。
+                    // 残るのは track.volume と pan。 pan は左右 gain として乗算。
+                    for (i, (sl, sr)) in stereo.left.iter().zip(stereo.right.iter()).enumerate() {
+                        if i >= track_buf.len() {
+                            break;
+                        }
+                        track_buf[i].0 += sl * vol * gain_l;
+                        track_buf[i].1 += sr * vol * gain_r;
+                    }
+                }
+                Err(e) => {
+                    // 致命ではない: validate でも検出されるべきだが、 ここでは黙ってスキップせず
+                    // stderr に出す (CLI quiet/verbose の判定は呼び出し側にない)。
+                    eprintln!(
+                        "warning: soundfont track {:?} skipped due to render error: {}",
+                        track.id, e
+                    );
+                }
+            }
+        } else if kind == "drum_kit" {
             // drum は note.pitch.as_drum_key() で voice を分岐。 melodic 経路と違って
             // freq/hold を取らないので、 closure ではなくここで直接ループする。
             let kit = kit_from_params(&track.instrument.params);
@@ -640,6 +702,41 @@ mod tests {
             .filter(|(a, b)| (a.0 - b.0).abs() > 0.001)
             .count();
         assert!(diff > 100, "kit param should change kick waveform: diff={diff}");
+    }
+
+    #[test]
+    fn soundfont_track_unknown_file_silently_skipped() {
+        // file が存在しなくても render は落ちず無音で済む (validate 側で報告される責務)。
+        let mut s = one_note_song();
+        let mut inst = Instrument::new("soundfont");
+        inst.params.insert("file".into(), serde_json::json!("/nonexistent/codetta-test/missing.sf2"));
+        s.tracks[0].instrument = inst;
+        let buf = render_to_buffer(&s);
+        let peak = buf
+            .iter()
+            .map(|(l, r)| l.abs().max(r.abs()))
+            .fold(0.0_f32, f32::max);
+        assert_eq!(peak, 0.0, "missing SF2 should leave silence (got {peak})");
+    }
+
+    #[test]
+    fn soundfont_track_renders_when_sf2_available() {
+        let Some(sf2) = std::env::var("CODETTA_TEST_SF2").ok() else {
+            eprintln!("CODETTA_TEST_SF2 not set — skipping render-level SF2 integration test");
+            return;
+        };
+        let mut s = one_note_song();
+        s.tracks[0].notes[0].dur = 2.0; // ~1s @ 120bpm
+        let mut inst = Instrument::new("soundfont");
+        inst.params.insert("file".into(), serde_json::json!(sf2));
+        inst.params.insert("preset".into(), serde_json::json!(0));
+        s.tracks[0].instrument = inst;
+        let buf = render_to_buffer(&s);
+        let peak = buf
+            .iter()
+            .map(|(l, r)| l.abs().max(r.abs()))
+            .fold(0.0_f32, f32::max);
+        assert!(peak > 0.01, "SF2 render should produce audible output, got {peak}");
     }
 
     #[test]
