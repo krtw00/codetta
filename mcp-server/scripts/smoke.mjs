@@ -1,13 +1,11 @@
 #!/usr/bin/env node
 /**
- * Codetta MCP server の handshake smoke test。
+ * Codetta MCP server の end-to-end smoke test。
  *
  * 1. `node dist/index.js` を spawn
- * 2. MCP プロトコルの initialize / tools/list / resources/list / resources/templates/list を投げる
- * 3. 各レスポンスを assert
- *
- * 期待: 5 tool (list_instruments / list_effects / create_song / set_notes / render_wav) と
- *      1 resource template (codetta://presets/{name}) が列挙される。
+ * 2. MCP プロトコルの initialize / tools/list / resources/list / resources/templates/list
+ * 3. **全 15 tool を最低 1 回叩いて** isError なしを確認
+ * 4. golden path (create_song -> add_track -> set_notes -> render_wav) を MCP のみで完結
  */
 import { spawn } from "node:child_process";
 import { dirname, resolve } from "node:path";
@@ -38,8 +36,6 @@ let buf = "";
 
 child.stdout.on("data", (chunk) => {
   buf += chunk.toString("utf8");
-  // Content-Length framing は MCP TS SDK の stdio では使われない
-  // (newline-delimited JSON)。改行ごとに切り出す。
   let idx;
   while ((idx = buf.indexOf("\n")) >= 0) {
     const line = buf.slice(0, idx).trim();
@@ -84,6 +80,14 @@ function assert(cond, msg) {
   }
 }
 
+async function callTool(name, args) {
+  const resp = await send("tools/call", { name, arguments: args });
+  assert(!resp.result?.isError, `${name} returned isError: ${JSON.stringify(resp.result?.structuredContent)}`);
+  const struct = resp.result?.structuredContent;
+  assert(struct?.ok === true, `${name} structured.ok !== true: ${JSON.stringify(struct)}`);
+  return struct;
+}
+
 (async () => {
   const initResp = await send("initialize", {
     protocolVersion: "2025-06-18",
@@ -98,11 +102,21 @@ function assert(cond, msg) {
   const toolNames = (tools.result?.tools ?? []).map((t) => t.name).sort();
   console.log("[ok] tools/list ->", toolNames);
   const expected = [
+    "add_notes",
+    "add_track",
+    "clear_notes",
     "create_song",
+    "edit_notes",
+    "get_song",
     "list_effects",
     "list_instruments",
+    "list_songs",
+    "remove_track",
     "render_wav",
+    "set_fx",
+    "set_instrument",
     "set_notes",
+    "validate_song",
   ];
   assert(
     JSON.stringify(toolNames) === JSON.stringify(expected),
@@ -128,20 +142,20 @@ function assert(cond, msg) {
     "expected preset cyber-lead in resources/list",
   );
 
-  // list_instruments tool call
-  const li = await send("tools/call", {
-    name: "list_instruments",
-    arguments: {},
-  });
-  assert(!li.result?.isError, "list_instruments returned isError");
-  const liStruct = li.result?.structuredContent;
-  assert(liStruct?.ok === true, "list_instruments structured.ok !== true");
+  // catalog tools
+  const li = await callTool("list_instruments", {});
   assert(
-    Array.isArray(liStruct?.instruments) && liStruct.instruments.length > 0,
-    "list_instruments.instruments empty",
+    Array.isArray(li.instruments) && li.instruments.length > 0,
+    "list_instruments empty",
   );
-  console.log("[ok] tools/call list_instruments ->",
-    `${liStruct.instruments.length} instruments`);
+  console.log("[ok] list_instruments ->", `${li.instruments.length} instruments`);
+
+  const le = await callTool("list_effects", {});
+  assert(
+    Array.isArray(le.effects) && le.effects.length > 0,
+    "list_effects empty",
+  );
+  console.log("[ok] list_effects ->", `${le.effects.length} effects`);
 
   // read a preset resource
   const rr = await send("resources/read", {
@@ -156,74 +170,160 @@ function assert(cond, msg) {
   const preview = contents[0].text?.slice(0, 60).replace(/\n/g, " ");
   console.log("[ok] resources/read ->", preview, "...");
 
-  // golden path: create_song -> add-track (via CLI directly, not via MCP since
-  // add_track tool isn't in skeleton) -> set_notes -> render_wav.
-  // ここでは MCP の create_song と set_notes と render_wav だけで完結する
-  // 最小フローを叩く。トラック追加は別 tool 化が次フェーズなので、
-  // create_song 後に CODETTA_BIN を直接呼んで lead トラックを足す。
+  // ----- golden path: MCP のみで完結 -----
   const songName = "smoke-test.codetta";
-  const created = await send("tools/call", {
-    name: "create_song",
-    arguments: {
-      path: songName,
-      bpm: 130,
-      key: "Am",
-      name: "MCP Smoke",
-      overwrite: true,
-    },
+  const created = await callTool("create_song", {
+    path: songName,
+    bpm: 130,
+    key: "Am",
+    name: "MCP Smoke",
+    overwrite: true,
   });
-  assert(!created.result?.isError, "create_song returned isError");
+  const absSongPath = created.path;
+  console.log("[ok] create_song ->", absSongPath);
+
+  // add_track (MCP のみ — CLI 直叩き fallback を撤去)
+  const addedLead = await callTool("add_track", {
+    path: songName,
+    track_id: "lead",
+    instrument: "sin",
+    volume: 0.8,
+  });
+  assert(addedLead.track_id === "lead", "add_track track_id mismatch");
+  console.log("[ok] add_track lead");
+
+  // 2 本目: drum_kit を params 付きで足す
+  const addedDrum = await callTool("add_track", {
+    path: songName,
+    track_id: "drum",
+    instrument: "drum_kit",
+    params: { kit: "808" },
+  });
+  assert(addedDrum.track_id === "drum", "add_track drum mismatch");
+  console.log("[ok] add_track drum (with params)");
+
+  // set_notes (lead)
+  const setN = await callTool("set_notes", {
+    path: songName,
+    track_id: "lead",
+    notes: [
+      { t: 0.0, pitch: "A4", dur: 0.5, vel: 100 },
+      { t: 0.5, pitch: "C5", dur: 0.5, vel: 100 },
+    ],
+  });
+  assert(setN.note_count === 2, "set_notes note_count != 2");
+  console.log("[ok] set_notes -> 2 notes");
+
+  // add_notes (lead に 2 ノート追加)
+  const addN = await callTool("add_notes", {
+    path: songName,
+    track_id: "lead",
+    notes: [
+      { t: 1.0, pitch: "E5", dur: 0.5, vel: 100 },
+      { t: 1.5, pitch: "G5", dur: 0.5, vel: 100 },
+    ],
+  });
+  assert(addN.added === 2, `add_notes added != 2 (got ${addN.added})`);
+  assert(addN.total_notes === 4, `add_notes total != 4 (got ${addN.total_notes})`);
+  console.log("[ok] add_notes -> +2 (total 4)");
+
+  // edit_notes (transpose +12)
+  const editN = await callTool("edit_notes", {
+    path: songName,
+    track_id: "lead",
+    ops: [{ op: "transpose", semitones: 12 }],
+  });
+  assert(editN.ops_applied === 1, `edit_notes ops_applied != 1`);
+  console.log("[ok] edit_notes -> 1 op applied");
+
+  // drum トラックにノートを書く (kick 4 つ打ち)
+  await callTool("set_notes", {
+    path: songName,
+    track_id: "drum",
+    notes: [
+      { t: 0.0, pitch: "kick", dur: 0.25, vel: 110 },
+      { t: 1.0, pitch: "kick", dur: 0.25, vel: 110 },
+      { t: 2.0, pitch: "kick", dur: 0.25, vel: 110 },
+      { t: 3.0, pitch: "kick", dur: 0.25, vel: 110 },
+    ],
+  });
+  console.log("[ok] drum set_notes -> 4 kicks");
+
+  // set_instrument (lead を saw_lead に変更)
+  const setInst = await callTool("set_instrument", {
+    path: songName,
+    track_id: "lead",
+    type: "saw_lead",
+    params: { attack: 0.005 },
+  });
+  assert(setInst.instrument === "saw_lead", "set_instrument mismatch");
+  assert(setInst.previous === "sin", "set_instrument previous mismatch");
+  console.log("[ok] set_instrument lead sin -> saw_lead");
+
+  // set_fx (lead に lowpass + reverb)
+  const setFx = await callTool("set_fx", {
+    path: songName,
+    track_id: "lead",
+    fx: [
+      { type: "lowpass", cutoff: 2000, q: 1.0 },
+      { type: "reverb", size: 0.4, mix: 0.2 },
+    ],
+  });
+  assert(setFx.fx_count === 2, `set_fx fx_count != 2 (got ${setFx.fx_count})`);
+  console.log("[ok] set_fx -> 2 fx");
+
+  // get_song
+  const info = await callTool("get_song", { path: songName });
+  assert(info.tracks.length === 2, `get_song tracks != 2 (got ${info.tracks.length})`);
+  const leadInfo = info.tracks.find((t) => t.id === "lead");
+  assert(leadInfo?.instrument === "saw_lead", "get_song lead instrument mismatch");
+  assert(leadInfo?.note_count === 4, "get_song lead note_count mismatch");
+  assert(leadInfo?.fx_count === 2, "get_song lead fx_count mismatch");
+  console.log("[ok] get_song -> 2 tracks, lead has 4 notes + 2 fx");
+
+  // validate_song
+  await callTool("validate_song", { path: songName });
+  console.log("[ok] validate_song -> ok");
+
+  // list_songs
+  const ls = await callTool("list_songs", {});
   assert(
-    created.result?.structuredContent?.ok === true,
-    "create_song structured.ok !== true",
+    ls.songs.some((s) => s.name === "smoke-test"),
+    "list_songs missing smoke-test",
   );
-  const absSongPath = created.result.structuredContent.path;
-  console.log("[ok] tools/call create_song ->", absSongPath);
+  console.log("[ok] list_songs ->", `${ls.songs.length} song(s)`);
 
-  // add a track via CLI directly (add_track is out of skeleton scope)
-  const { execFileSync } = await import("node:child_process");
-  execFileSync(
-    codettaBin,
-    ["add-track", absSongPath, "--id", "lead", "--instrument", "sin"],
-    { stdio: "pipe" },
-  );
-
-  const setN = await send("tools/call", {
-    name: "set_notes",
-    arguments: {
-      path: songName,
-      track_id: "lead",
-      notes: [
-        { t: 0.0, pitch: "A4", dur: 0.5, vel: 100 },
-        { t: 0.5, pitch: "C5", dur: 0.5, vel: 100 },
-      ],
-    },
-  });
-  assert(!setN.result?.isError, "set_notes returned isError");
-  assert(
-    setN.result?.structuredContent?.note_count === 2,
-    "set_notes note_count != 2",
-  );
-  console.log("[ok] tools/call set_notes -> 2 notes");
-
-  const rendered = await send("tools/call", {
-    name: "render_wav",
-    arguments: { path: songName },
-  });
-  assert(!rendered.result?.isError, "render_wav returned isError");
-  const renderStruct = rendered.result?.structuredContent;
-  assert(renderStruct?.ok === true, "render_wav structured.ok !== true");
+  // render_wav
+  const renderStruct = await callTool("render_wav", { path: songName });
   assert(
     typeof renderStruct?.output === "string" && renderStruct.output.endsWith(".wav"),
     "render_wav output is not a .wav path",
   );
   console.log(
-    "[ok] tools/call render_wav ->",
+    "[ok] render_wav ->",
     renderStruct.output,
     `(${renderStruct.duration_sec}s, ${renderStruct.rtfactor}x rt)`,
   );
 
-  console.log("\nAll smoke checks passed.");
+  // clear_notes (drum)
+  const clr = await callTool("clear_notes", {
+    path: songName,
+    track_id: "drum",
+  });
+  assert(clr.removed === 4, `clear_notes removed != 4 (got ${clr.removed})`);
+  console.log("[ok] clear_notes drum -> removed 4");
+
+  // remove_track (drum)
+  const rmT = await callTool("remove_track", {
+    path: songName,
+    track_id: "drum",
+  });
+  assert(rmT.track_id === "drum", "remove_track mismatch");
+  const info2 = await callTool("get_song", { path: songName });
+  assert(info2.tracks.length === 1, `tracks != 1 after remove_track (got ${info2.tracks.length})`);
+  console.log("[ok] remove_track drum -> 1 track remaining");
+
+  console.log("\nAll smoke checks passed (15 tools + 2 resource endpoints).");
   child.kill();
   process.exit(0);
 })().catch((e) => {
