@@ -226,13 +226,9 @@ pub fn render_voice_saw_pad(
 ///
 /// `kit` で `808` / `909` 系のバリエーションに切り替え可能 (sound.md 仕様)。
 /// 不明 / 未指定なら `default` レシピ。 波形長は kit ごとの amp_decay + 50ms tail で自然消滅する。
-/// `chip` は sin/click ベースから外れる別形式 (8bit 風 square sweep) なので [`render_drum_kick_chip`] に dispatch。
 ///
 /// note の velocity は呼び出し側 (render) で乗算するので、 ここではピーク 1.0 近辺の波形を返す。
 pub fn render_drum_kick(kit: Option<&str>) -> Vec<f32> {
-    if kit == Some("chip") {
-        return render_drum_kick_chip();
-    }
     let sr = SAMPLE_RATE as f32;
     // (f_start, f_end, pitch_decay_sec, amp_decay_sec, click_gain)
     let (f_start, f_end, pitch_decay, amp_decay, click_gain) = match kit.unwrap_or("default") {
@@ -275,11 +271,7 @@ pub fn render_drum_kick(kit: Option<&str>) -> Vec<f32> {
 ///
 /// bandpass は 1 極 highpass (1.5kHz) + 1 極 lowpass (4kHz) を直列にした簡易版。
 /// `kit` で `808` (sin 主体、 長め) / `909` (noise 主体、 短め) に切り替え。
-/// `chip` は 1bit noise のみで sin を持たない別形式なので [`render_drum_snare_chip`] に dispatch。
 pub fn render_drum_snare(kit: Option<&str>) -> Vec<f32> {
-    if kit == Some("chip") {
-        return render_drum_snare_chip();
-    }
     let sr = SAMPLE_RATE as f32;
     let (sin_gain, noise_gain, decay) = match kit.unwrap_or("default") {
         "808" => (0.7_f32, 0.4_f32, 0.25_f32),
@@ -311,69 +303,6 @@ pub fn render_drum_snare(kit: Option<&str>) -> Vec<f32> {
             (-(t - attack_samples as f32 / sr) / amp_tau).exp()
         };
         out.push(((sin * sin_gain + bp * noise_gain) * amp).clamp(-1.0, 1.0));
-    }
-    out
-}
-
-/// chip 風 kick。 naive square (PolyBLEP 補正なし) の pitch sweep + 短い amp decay。
-///
-/// ファミコンの pulse channel ぽい「コッ」 / 「ポッ」 感を出すため、 sin ではなく 50% duty square を
-/// 直接走らせる。 エイリアシングは「8bit 感」 として許容する (sound.md の chip kit 方針)。
-/// pitch sweep は 200Hz → 60Hz exp (decay 25ms)、 amp は 80ms exp。 click noise は持たない。
-fn render_drum_kick_chip() -> Vec<f32> {
-    let sr = SAMPLE_RATE as f32;
-    let pitch_decay = 0.025_f32;
-    let amp_decay = 0.08_f32;
-    let f_start = 200.0_f32;
-    let f_end = 60.0_f32;
-    let total = ((amp_decay + 0.05) * sr) as usize;
-    let mut out = Vec::with_capacity(total);
-    let mut phase = 0.0_f32; // 0..1
-    let attack_samples = ((0.001 * sr) as usize).max(1);
-    let amp_tau = amp_decay / 3.0;
-    for i in 0..total {
-        let t = i as f32 / sr;
-        let pitch_env = (-t / pitch_decay).exp();
-        let freq = f_end + (f_start - f_end) * pitch_env;
-        phase += freq / sr;
-        if phase >= 1.0 {
-            phase -= 1.0;
-        }
-        let sq = if phase < 0.5 { 1.0 } else { -1.0 };
-        let amp = if i < attack_samples {
-            i as f32 / attack_samples as f32
-        } else {
-            (-(t - attack_samples as f32 / sr) / amp_tau).exp()
-        };
-        out.push((sq * amp).clamp(-1.0, 1.0));
-    }
-    out
-}
-
-/// chip 風 snare。 1bit noise (xorshift32 の sign のみ) を highpass で薄めて短い decay。
-///
-/// NES noise channel の long-mode (15bit LFSR) を近似する用途ではなく、 「ザッ」 という lo-fi
-/// 矩形ノイズ感を出す簡易版。 sin 成分は持たない (chip kit の snare は noise 主体)。
-fn render_drum_snare_chip() -> Vec<f32> {
-    let sr = SAMPLE_RATE as f32;
-    let decay = 0.06_f32;
-    let total = ((decay + 0.05) * sr) as usize;
-    let mut out = Vec::with_capacity(total);
-    let mut rng = Xorshift32::new(0xB16B_00B5);
-    let mut hp = (0.0_f32, 0.0_f32);
-    let attack_samples = ((0.001 * sr) as usize).max(1);
-    let amp_tau = decay / 3.0;
-    for i in 0..total {
-        // 1bit 量子化 (sign 関数)
-        let bit = if rng.noise() >= 0.0 { 1.0 } else { -1.0 };
-        let h = one_pole_highpass_tick(&mut hp, bit, 2000.0, sr);
-        let t = i as f32 / sr;
-        let amp = if i < attack_samples {
-            i as f32 / attack_samples as f32
-        } else {
-            (-(t - attack_samples as f32 / sr) / amp_tau).exp()
-        };
-        out.push((h * amp).clamp(-1.0, 1.0));
     }
     out
 }
@@ -876,65 +805,6 @@ mod tests {
         assert!(diff_lo_hi > 100, "lo and hi toms should differ: diff={diff_lo_hi}");
         for v in [&lo, &mid, &hi] {
             assert!(peak(v) > 0.2 && peak(v) <= 1.0);
-        }
-    }
-
-    #[test]
-    fn drum_kick_chip_distinct_from_default() {
-        // chip kit は別関数に dispatch されるので、 default / 808 / 909 のいずれとも波形が一致しない
-        let chip = render_drum_kick(Some("chip"));
-        assert!(!chip.is_empty());
-        let p = peak(&chip);
-        assert!(p > 0.3, "chip kick should be audible: {p}");
-        assert!(p <= 1.0, "chip kick should stay bounded: {p}");
-        for other_kit in [None, Some("808"), Some("909")] {
-            let other = render_drum_kick(other_kit);
-            // 長さか中身のどちらかが必ず違う
-            let differs = chip.len() != other.len()
-                || chip
-                    .iter()
-                    .zip(other.iter())
-                    .filter(|(a, b)| (*a - *b).abs() > 0.01)
-                    .count()
-                    > 100;
-            assert!(differs, "chip kick should differ from kit={other_kit:?}");
-        }
-    }
-
-    #[test]
-    fn drum_snare_chip_distinct_from_default() {
-        let chip = render_drum_snare(Some("chip"));
-        assert!(!chip.is_empty());
-        let p = peak(&chip);
-        assert!(p > 0.1, "chip snare should be audible: {p}");
-        assert!(p <= 1.0, "chip snare should stay bounded: {p}");
-        for other_kit in [None, Some("808"), Some("909")] {
-            let other = render_drum_snare(other_kit);
-            let differs = chip.len() != other.len()
-                || chip
-                    .iter()
-                    .zip(other.iter())
-                    .filter(|(a, b)| (*a - *b).abs() > 0.01)
-                    .count()
-                    > 100;
-            assert!(differs, "chip snare should differ from kit={other_kit:?}");
-        }
-    }
-
-    #[test]
-    fn drum_chip_voices_have_finite_tail() {
-        for (name, v) in [
-            ("chip_kick", render_drum_kick(Some("chip"))),
-            ("chip_snare", render_drum_snare(Some("chip"))),
-        ] {
-            let tail_start = v.len().saturating_sub(SAMPLE_RATE as usize / 200); // 末尾 5ms
-            let tail = &v[tail_start..];
-            let head_peak = peak(&v[..v.len() / 2]);
-            let tail_peak = peak(tail);
-            assert!(
-                tail_peak < head_peak * 0.5,
-                "{name} tail should be quieter than head: head={head_peak} tail={tail_peak}"
-            );
         }
     }
 
