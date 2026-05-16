@@ -1,0 +1,33 @@
+{
+  "name": "@codetta/mcp-server",
+  "version": "0.0.1",
+  "description": "Codetta MCP server — codetta-cli を MCP (Model Context Protocol) tool/resource として LLM クライアントに公開する薄い wrapper",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "codetta-mcp": "./dist/index.js"
+  },
+  "main": "./dist/index.js",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "start": "node dist/index.js",
+    "clean": "rm -rf dist",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.18.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  }
+}
