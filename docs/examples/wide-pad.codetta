@@ -1,0 +1,40 @@
+{
+  "version": "0.1",
+  "metadata": {
+    "name": "Preset: wide_pad",
+    "bpm": 100,
+    "key": "Am",
+    "time_signature": [4, 4],
+    "tags": ["preset", "cyber", "pad"]
+  },
+  "tracks": [
+    {
+      "id": "pad",
+      "name": "Wide Pad",
+      "instrument": {
+        "type": "saw_pad",
+        "params": { "attack": 0.5, "decay": 0.3, "sustain": 0.6, "release": 1.0, "detune_cents": 15 }
+      },
+      "volume": 0.55,
+      "pan": 0.0,
+      "fx": [
+        { "type": "lowpass", "cutoff": 2000, "q": 0.7 },
+        { "type": "reverb", "size": 0.9, "damp": 0.6, "mix": 0.5 }
+      ],
+      "notes": [
+        { "t": 0.0, "pitch": "A3", "dur": 4.0, "vel": 90 },
+        { "t": 0.0, "pitch": "C4", "dur": 4.0, "vel": 85 },
+        { "t": 0.0, "pitch": "E4", "dur": 4.0, "vel": 85 },
+        { "t": 4.0, "pitch": "F3", "dur": 4.0, "vel": 90 },
+        { "t": 4.0, "pitch": "A3", "dur": 4.0, "vel": 85 },
+        { "t": 4.0, "pitch": "C4", "dur": 4.0, "vel": 85 },
+        { "t": 8.0, "pitch": "G3", "dur": 4.0, "vel": 90 },
+        { "t": 8.0, "pitch": "B3", "dur": 4.0, "vel": 85 },
+        { "t": 8.0, "pitch": "D4", "dur": 4.0, "vel": 85 },
+        { "t": 12.0, "pitch": "E3", "dur": 4.0, "vel": 90 },
+        { "t": 12.0, "pitch": "G3", "dur": 4.0, "vel": 85 },
+        { "t": 12.0, "pitch": "B3", "dur": 4.0, "vel": 85 }
+      ]
+    }
+  ]
+}
