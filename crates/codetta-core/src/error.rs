@@ -20,6 +20,12 @@ pub enum CodettaError {
     #[error("unknown schema version: {0}")]
     UnknownVersion(String),
 
+    #[error("track not found: {0}")]
+    TrackNotFound(String),
+
+    #[error("duplicate track id: {0}")]
+    TrackIdDuplicate(String),
+
     #[error("validation failed ({} error(s))", .0.len())]
     Validation(Vec<ValidationError>),
 

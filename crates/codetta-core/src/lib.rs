@@ -6,6 +6,7 @@
 //! Phase 0 first cut の現スコープ: モデル + JSON I/O + バリデーション + `sin`
 //! オシレータでの WAV レンダリング。 他のオシレータ / フィルタ / ドラム / MIDI I/O は続く実装で。
 
+pub mod edit;
 pub mod error;
 pub mod io;
 pub mod model;
@@ -13,6 +14,9 @@ pub mod render;
 pub mod synth;
 pub mod validate;
 
+pub use edit::{
+    add_notes, add_track, clear_notes, remove_track, set_fx, set_instrument, set_notes, track_mut,
+};
 pub use error::{CodettaError, ValidationError};
 pub use io::{load, save};
 pub use model::{Effect, Instrument, Metadata, Note, Pitch, Song, Track};
