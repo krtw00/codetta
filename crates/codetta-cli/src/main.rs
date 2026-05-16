@@ -700,16 +700,34 @@ fn instrument_catalog() -> Vec<Value> {
                 "description": "純音 (倍音なし)。 サブベース / パッド / FM 素材",
                 "params": adsr_params,
             }),
-            "saw" | "saw_lead" => json!({
-                "type": t,
+            "saw" => json!({
+                "type": "saw",
                 "category": "melodic",
-                "description": "PolyBLEP saw。 リード / ベース / パッド (倍音豊富)",
+                "description": "PolyBLEP saw (倍音豊富)。 主旋律 / アルペジオ / コード裏鳴り / 単音ベースに使える汎用ノコギリ波。 用途を絞った alias が saw_lead (主旋律前面) / saw_pad (持続パッド)",
                 "params": adsr_params,
             }),
-            "square" | "square_bass" => json!({
-                "type": t,
+            "saw_lead" => json!({
+                "type": "saw_lead",
                 "category": "melodic",
-                "description": "PolyBLEP pulse。 デューティ比可変、 8bit / チップチューン",
+                "description": "`saw` と同一波形の用途別 alias。 リード (前面に出る主旋律) を意図する時に選ぶ。 attack / release を短めにして立ち上がりをハッキリさせる使い方が一般的",
+                "params": adsr_params,
+            }),
+            "square" => json!({
+                "type": "square",
+                "category": "melodic",
+                "description": "PolyBLEP pulse (デューティ比可変)。 シーケンス / アルペジオ / コード / 8bit 風メロディ向け汎用パルス波。 低音用途専用の alias が square_bass",
+                "params": {
+                    "attack":  adsr_params["attack"],
+                    "decay":   adsr_params["decay"],
+                    "sustain": adsr_params["sustain"],
+                    "release": adsr_params["release"],
+                    "pulse_width": { "type": "float", "default": 0.5, "range": [0.05, 0.95] },
+                },
+            }),
+            "square_bass" => json!({
+                "type": "square_bass",
+                "category": "melodic",
+                "description": "`square` と同一波形の用途別 alias。 低音ベース (root のみ / root + 5th 重ね等) を意図する時に選ぶ。 pulse_width 0.5 + 短い release が定石、 8bit 風アレンジでも頻出",
                 "params": {
                     "attack":  adsr_params["attack"],
                     "decay":   adsr_params["decay"],
