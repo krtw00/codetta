@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
-use codetta_core::{self as core, CodettaError, Effect, Instrument, Note, Song, Track};
+use codetta_core::{self as core, CodettaError, Effect, Instrument, Note, NoteOp, Song, Track};
 use serde_json::{json, Map, Value};
 
 #[derive(Parser)]
@@ -60,6 +60,8 @@ enum Command {
     SetInstrument(SetInstrumentArgs),
     /// トラックのエフェクトチェーンを全置換
     SetFx(SetFxArgs),
+    /// ノートに対する一括変形 (transpose / shift / scale / quantize 等)
+    EditNotes(EditNotesArgs),
 }
 
 #[derive(Args)]
@@ -181,6 +183,20 @@ struct SetInstrumentArgs {
 }
 
 #[derive(Args)]
+struct EditNotesArgs {
+    path: PathBuf,
+    /// 対象トラック ID
+    #[arg(long)]
+    track: String,
+    /// 操作配列を JSON 文字列で渡す (排他: `--ops-file`)。
+    #[arg(long = "ops-json", conflicts_with = "ops_file")]
+    ops_json: Option<String>,
+    /// 操作配列を JSON ファイルで渡す。
+    #[arg(long = "ops-file", conflicts_with = "ops_json")]
+    ops_file: Option<PathBuf>,
+}
+
+#[derive(Args)]
 struct SetFxArgs {
     path: PathBuf,
     #[arg(long)]
@@ -222,6 +238,7 @@ fn main() -> ExitCode {
         Command::ClearNotes(a) => cmd_clear_notes(a, &cli.common),
         Command::SetInstrument(a) => cmd_set_instrument(a, &cli.common),
         Command::SetFx(a) => cmd_set_fx(a, &cli.common),
+        Command::EditNotes(a) => cmd_edit_notes(a, &cli.common),
     };
     ExitCode::from(exit)
 }
@@ -591,6 +608,61 @@ fn cmd_set_fx(args: SetFxArgs, common: &CommonOpts) -> u8 {
     }
     emit_json(&json!({ "ok": true, "track_id": args.track, "fx_count": count }));
     0
+}
+
+fn cmd_edit_notes(args: EditNotesArgs, common: &CommonOpts) -> u8 {
+    let mut song = match core::load(&args.path) {
+        Ok(s) => s,
+        Err(e) => return emit_error(&e),
+    };
+    let ops = match load_ops(args.ops_json.as_deref(), args.ops_file.as_deref()) {
+        Ok(v) => v,
+        Err(code) => return code,
+    };
+    let stats = match core::edit_notes(&mut song, &args.track, &ops) {
+        Ok(s) => s,
+        Err(e) => return emit_error(&e),
+    };
+    if let Some(code) = save_after_validate(&song, &args.path, common) {
+        return code;
+    }
+    if !common.quiet {
+        eprintln!(
+            "[OK] Applied {} op(s) on '{}' ({} note-touches)",
+            stats.ops_applied, args.track, stats.notes_affected
+        );
+    }
+    emit_json(&json!({
+        "ok": true,
+        "track_id": args.track,
+        "ops_applied": stats.ops_applied,
+        "notes_affected": stats.notes_affected,
+    }));
+    0
+}
+
+fn load_ops(json_str: Option<&str>, file: Option<&Path>) -> Result<Vec<NoteOp>, u8> {
+    let raw: String = match (json_str, file) {
+        (Some(s), _) => s.to_string(),
+        (None, Some(p)) => match std::fs::read_to_string(p) {
+            Ok(s) => s,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(emit_error(&CodettaError::FileNotFound(p.to_path_buf())));
+            }
+            Err(e) => return Err(emit_error(&CodettaError::Io(e))),
+        },
+        (None, None) => {
+            emit_json(&json!({
+                "ok": false,
+                "errors": [{ "code": "INVALID_JSON", "message": "either --ops-json or --ops-file is required" }]
+            }));
+            return Err(2);
+        }
+    };
+    match serde_json::from_str::<Vec<NoteOp>>(&raw) {
+        Ok(v) => Ok(v),
+        Err(e) => Err(emit_error(&CodettaError::InvalidJson(e))),
+    }
 }
 
 /// `--fx-json` / `--fx-file` から `Vec<Effect>` を取り出す。

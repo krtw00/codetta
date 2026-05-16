@@ -15,7 +15,8 @@ pub mod synth;
 pub mod validate;
 
 pub use edit::{
-    add_notes, add_track, clear_notes, remove_track, set_fx, set_instrument, set_notes, track_mut,
+    add_notes, add_track, clear_notes, edit_notes, remove_track, set_fx, set_instrument,
+    set_notes, track_mut, EditNotesStats, NoteOp,
 };
 pub use error::{CodettaError, ValidationError};
 pub use io::{load, save};

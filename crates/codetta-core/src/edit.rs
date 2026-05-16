@@ -7,8 +7,10 @@
 //! 値域や schema 違反は [`crate::validate`] が担当する。 呼び出し側は edit が成功した
 //! 後に validate を回す。
 
+use serde::Deserialize;
+
 use crate::error::CodettaError;
-use crate::model::{Effect, Instrument, Note, Song, Track};
+use crate::model::{Effect, Instrument, Note, Pitch, Song, Track};
 
 /// 新規トラックを追加する。
 ///
@@ -104,6 +106,159 @@ pub fn set_fx(
     let track = track_mut(song, track_id)?;
     track.fx = fx;
     Ok(track.fx.len())
+}
+
+/// `edit-notes` の 1 操作。 03-cli.md と対応。
+///
+/// `range` は `[t_start, t_end)` (半開区間)。 ノートの `t` がこの範囲に
+/// 入っているかで適用判定する。 None は「全ノート対象」。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case")]
+pub enum NoteOp {
+    /// 半音単位で移調 (drum_kit トラックは適用しても意味がないので skip)。
+    Transpose {
+        semitones: i32,
+        #[serde(default)]
+        range: Option<[f32; 2]>,
+    },
+    /// 時間方向にビート単位でシフト。 結果が負になるノートはエラー。
+    ShiftTime {
+        beats: f32,
+        #[serde(default)]
+        range: Option<[f32; 2]>,
+    },
+    /// 時間軸を引き伸ばし / 縮め (t と dur の両方に factor を掛ける)。
+    /// range は持たない — 全体に作用する。
+    ScaleTime { factor: f32 },
+    /// ベロシティ一括変更 (0..=127 にクランプ)。
+    SetVelocity {
+        vel: u8,
+        #[serde(default)]
+        range: Option<[f32; 2]>,
+    },
+    /// `t` をグリッドに量子化 (例: grid=0.25 → 1/16 拍)。 dur は変えない。
+    Quantize { grid: f32 },
+    /// 範囲内のノートを削除。
+    DeleteRange { range: [f32; 2] },
+}
+
+/// `edit-notes` の戻り値統計。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct EditNotesStats {
+    pub ops_applied: usize,
+    pub notes_affected: usize,
+}
+
+/// 複数の op を順に適用する。 一つでも実行不能 (例: shift で t<0) ならエラー。
+pub fn edit_notes(
+    song: &mut Song,
+    track_id: &str,
+    ops: &[NoteOp],
+) -> Result<EditNotesStats, CodettaError> {
+    let track = track_mut(song, track_id)?;
+    let mut stats = EditNotesStats::default();
+    for op in ops {
+        let n = apply_note_op(&mut track.notes, op)?;
+        stats.ops_applied += 1;
+        stats.notes_affected += n;
+    }
+    sort_notes(&mut track.notes);
+    Ok(stats)
+}
+
+fn apply_note_op(notes: &mut Vec<Note>, op: &NoteOp) -> Result<usize, CodettaError> {
+    match op {
+        NoteOp::Transpose { semitones, range } => {
+            let mut affected = 0;
+            for n in notes.iter_mut() {
+                if !in_range(n.t, range) {
+                    continue;
+                }
+                match n.pitch.as_midi() {
+                    Ok(m) => {
+                        let new_m = m as i32 + *semitones;
+                        if !(0..=127).contains(&new_m) {
+                            return Err(CodettaError::Render(format!(
+                                "transpose: MIDI {m} + {semitones} = {new_m} is out of 0..=127"
+                            )));
+                        }
+                        n.pitch = Pitch::Midi(new_m as u8);
+                        affected += 1;
+                    }
+                    Err(_) => {
+                        // drum key 等は skip
+                    }
+                }
+            }
+            Ok(affected)
+        }
+        NoteOp::ShiftTime { beats, range } => {
+            let mut affected = 0;
+            for n in notes.iter_mut() {
+                if !in_range(n.t, range) {
+                    continue;
+                }
+                let new_t = n.t + *beats;
+                if new_t < 0.0 {
+                    return Err(CodettaError::Render(format!(
+                        "shift_time: note at t={} would become negative ({new_t})",
+                        n.t
+                    )));
+                }
+                n.t = new_t;
+                affected += 1;
+            }
+            Ok(affected)
+        }
+        NoteOp::ScaleTime { factor } => {
+            if !factor.is_finite() || *factor <= 0.0 {
+                return Err(CodettaError::Render(format!(
+                    "scale_time: factor must be positive finite, got {factor}"
+                )));
+            }
+            for n in notes.iter_mut() {
+                n.t *= *factor;
+                n.dur *= *factor;
+            }
+            Ok(notes.len())
+        }
+        NoteOp::SetVelocity { vel, range } => {
+            let clamped = (*vel).min(127);
+            let mut affected = 0;
+            for n in notes.iter_mut() {
+                if !in_range(n.t, range) {
+                    continue;
+                }
+                n.vel = clamped;
+                affected += 1;
+            }
+            Ok(affected)
+        }
+        NoteOp::Quantize { grid } => {
+            if !grid.is_finite() || *grid <= 0.0 {
+                return Err(CodettaError::Render(format!(
+                    "quantize: grid must be positive finite, got {grid}"
+                )));
+            }
+            for n in notes.iter_mut() {
+                let g = *grid;
+                n.t = (n.t / g).round() * g;
+            }
+            Ok(notes.len())
+        }
+        NoteOp::DeleteRange { range } => {
+            let before = notes.len();
+            notes.retain(|n| !(n.t >= range[0] && n.t < range[1]));
+            Ok(before - notes.len())
+        }
+    }
+}
+
+fn in_range(t: f32, range: &Option<[f32; 2]>) -> bool {
+    match range {
+        None => true,
+        Some([a, b]) => t >= *a && t < *b,
+    }
 }
 
 /// ノートを `t` 昇順、 同 `t` ならピッチで安定ソート。
@@ -261,6 +416,216 @@ mod tests {
         .unwrap();
         assert_eq!(count, 2);
         assert_eq!(s.tracks[0].fx[0].kind, "lowpass");
+    }
+
+    fn make_song_with_notes() -> Song {
+        let mut s = Song::new("t", 120, None);
+        add_track(&mut s, new_track("lead")).unwrap();
+        set_notes(
+            &mut s,
+            "lead",
+            vec![
+                note(0.0, "C4", 0.5, 100),
+                note(0.5, "D4", 0.5, 100),
+                note(1.0, "E4", 0.5, 100),
+                note(2.0, "G4", 0.5, 80),
+            ],
+        )
+        .unwrap();
+        s
+    }
+
+    #[test]
+    fn edit_notes_transpose_full() {
+        let mut s = make_song_with_notes();
+        let stats = edit_notes(
+            &mut s,
+            "lead",
+            &[NoteOp::Transpose {
+                semitones: -12,
+                range: None,
+            }],
+        )
+        .unwrap();
+        assert_eq!(stats.ops_applied, 1);
+        assert_eq!(stats.notes_affected, 4);
+        assert_eq!(s.tracks[0].notes[0].pitch.as_midi().unwrap(), 60 - 12);
+        assert_eq!(s.tracks[0].notes[3].pitch.as_midi().unwrap(), 67 - 12);
+    }
+
+    #[test]
+    fn edit_notes_transpose_range_partial() {
+        let mut s = make_song_with_notes();
+        // 0.5..1.5 → ノート 2 つ (t=0.5, 1.0)
+        let stats = edit_notes(
+            &mut s,
+            "lead",
+            &[NoteOp::Transpose {
+                semitones: 12,
+                range: Some([0.5, 1.5]),
+            }],
+        )
+        .unwrap();
+        assert_eq!(stats.notes_affected, 2);
+        assert_eq!(s.tracks[0].notes[0].pitch.as_midi().unwrap(), 60); // unchanged
+        assert_eq!(s.tracks[0].notes[1].pitch.as_midi().unwrap(), 62 + 12);
+        assert_eq!(s.tracks[0].notes[2].pitch.as_midi().unwrap(), 64 + 12);
+        assert_eq!(s.tracks[0].notes[3].pitch.as_midi().unwrap(), 67); // unchanged
+    }
+
+    #[test]
+    fn edit_notes_transpose_out_of_range_fails() {
+        let mut s = make_song_with_notes();
+        let err = edit_notes(
+            &mut s,
+            "lead",
+            &[NoteOp::Transpose {
+                semitones: 200,
+                range: None,
+            }],
+        )
+        .unwrap_err();
+        assert!(matches!(err, CodettaError::Render(_)));
+    }
+
+    #[test]
+    fn edit_notes_shift_time() {
+        let mut s = make_song_with_notes();
+        edit_notes(
+            &mut s,
+            "lead",
+            &[NoteOp::ShiftTime {
+                beats: 1.0,
+                range: None,
+            }],
+        )
+        .unwrap();
+        assert_eq!(s.tracks[0].notes[0].t, 1.0);
+        assert_eq!(s.tracks[0].notes[3].t, 3.0);
+    }
+
+    #[test]
+    fn edit_notes_shift_time_negative_fails() {
+        let mut s = make_song_with_notes();
+        let err = edit_notes(
+            &mut s,
+            "lead",
+            &[NoteOp::ShiftTime {
+                beats: -10.0,
+                range: None,
+            }],
+        )
+        .unwrap_err();
+        assert!(matches!(err, CodettaError::Render(_)));
+    }
+
+    #[test]
+    fn edit_notes_scale_time() {
+        let mut s = make_song_with_notes();
+        edit_notes(&mut s, "lead", &[NoteOp::ScaleTime { factor: 2.0 }]).unwrap();
+        assert_eq!(s.tracks[0].notes[1].t, 1.0);
+        assert_eq!(s.tracks[0].notes[1].dur, 1.0);
+        assert_eq!(s.tracks[0].notes[3].t, 4.0);
+    }
+
+    #[test]
+    fn edit_notes_scale_time_bad_factor() {
+        let mut s = make_song_with_notes();
+        let err = edit_notes(&mut s, "lead", &[NoteOp::ScaleTime { factor: -1.0 }]).unwrap_err();
+        assert!(matches!(err, CodettaError::Render(_)));
+    }
+
+    #[test]
+    fn edit_notes_set_velocity() {
+        let mut s = make_song_with_notes();
+        edit_notes(
+            &mut s,
+            "lead",
+            &[NoteOp::SetVelocity {
+                vel: 90,
+                range: None,
+            }],
+        )
+        .unwrap();
+        for n in &s.tracks[0].notes {
+            assert_eq!(n.vel, 90);
+        }
+    }
+
+    #[test]
+    fn edit_notes_quantize() {
+        let mut s = Song::new("t", 120, None);
+        add_track(&mut s, new_track("lead")).unwrap();
+        set_notes(
+            &mut s,
+            "lead",
+            vec![
+                note(0.03, "C4", 0.5, 100),
+                note(0.51, "D4", 0.5, 100),
+                note(1.13, "E4", 0.5, 100),
+            ],
+        )
+        .unwrap();
+        edit_notes(&mut s, "lead", &[NoteOp::Quantize { grid: 0.25 }]).unwrap();
+        // 0.03 → 0.0, 0.51 → 0.5, 1.13 → 1.25
+        assert!((s.tracks[0].notes[0].t - 0.0).abs() < 1e-5);
+        assert!((s.tracks[0].notes[1].t - 0.5).abs() < 1e-5);
+        assert!((s.tracks[0].notes[2].t - 1.25).abs() < 1e-5);
+    }
+
+    #[test]
+    fn edit_notes_delete_range() {
+        let mut s = make_song_with_notes();
+        let stats = edit_notes(
+            &mut s,
+            "lead",
+            &[NoteOp::DeleteRange { range: [0.5, 1.5] }],
+        )
+        .unwrap();
+        // t=0.5 と t=1.0 が消える
+        assert_eq!(stats.notes_affected, 2);
+        assert_eq!(s.tracks[0].notes.len(), 2);
+        assert_eq!(s.tracks[0].notes[0].t, 0.0);
+        assert_eq!(s.tracks[0].notes[1].t, 2.0);
+    }
+
+    #[test]
+    fn edit_notes_chains_ops() {
+        let mut s = make_song_with_notes();
+        let stats = edit_notes(
+            &mut s,
+            "lead",
+            &[
+                NoteOp::Transpose {
+                    semitones: -12,
+                    range: None,
+                },
+                NoteOp::SetVelocity {
+                    vel: 100,
+                    range: None,
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(stats.ops_applied, 2);
+        // 1 op 目で 4 + 2 op 目で 4 = 8 (notes_affected はカウントの合計)
+        assert_eq!(stats.notes_affected, 8);
+    }
+
+    #[test]
+    fn note_op_deserializes_from_json() {
+        let ops: Vec<NoteOp> = serde_json::from_str(
+            r#"[
+                {"op":"transpose","semitones":-12},
+                {"op":"shift_time","beats":1.0,"range":[0,2]},
+                {"op":"scale_time","factor":0.5},
+                {"op":"set_velocity","vel":90},
+                {"op":"quantize","grid":0.25},
+                {"op":"delete_range","range":[2,4]}
+            ]"#,
+        )
+        .unwrap();
+        assert_eq!(ops.len(), 6);
     }
 
     #[test]
