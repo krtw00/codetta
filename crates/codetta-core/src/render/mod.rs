@@ -65,45 +65,83 @@ pub fn render_to_buffer(song: &Song) -> Vec<(f32, f32)> {
             continue;
         }
         let kind = track.instrument.kind.as_str();
-        let adsr = AdsrParams::from_params(&track.instrument.params);
-        // 楽器ごとに extra params が違うので closure で受ける (sin/saw は adsr のみ、 square は pulse_width 追加)。
-        let render_voice: Box<dyn Fn(f32, f32) -> Vec<f32>> = match kind {
-            "sin" => Box::new(move |f, h| manual::render_voice(f, h, adsr)),
-            "saw" | "saw_lead" => Box::new(move |f, h| manual::render_voice_saw(f, h, adsr)),
-            "square" | "square_bass" => {
-                let pw = pulse_width_from_params(&track.instrument.params);
-                Box::new(move |f, h| manual::render_voice_square(f, h, adsr, pw))
-            }
-            "triangle" => Box::new(move |f, h| manual::render_voice_triangle(f, h, adsr)),
-            "saw_pad" => {
-                let detune = detune_cents_from_params(&track.instrument.params);
-                Box::new(move |f, h| manual::render_voice_saw_pad(f, h, adsr, detune))
-            }
-            _ => continue, // 未実装 (drum_kit はまだ無音)
-        };
         let (gain_l, gain_r) = pan_gains(track.pan);
         let vol = track.volume;
 
         // per-track buffer に書き出し
         let mut track_buf = vec![(0.0_f32, 0.0_f32); total_samples];
-        for note in &track.notes {
-            let midi = match note.pitch.as_midi() {
-                Ok(m) => m,
-                Err(_) => continue,
-            };
-            let freq = midi_to_freq(midi);
-            let start_sample = (note.t * sec_per_beat * sr) as usize;
-            let hold_sec = note.dur * sec_per_beat;
-            let voice = render_voice(freq, hold_sec);
-            let vel_gain = note.vel as f32 / 127.0;
-            let g = vol * vel_gain;
-            for (i, s) in voice.iter().enumerate() {
-                let idx = start_sample + i;
-                if idx >= track_buf.len() {
-                    break;
+
+        if kind == "drum_kit" {
+            // drum は note.pitch.as_drum_key() で voice を分岐。 melodic 経路と違って
+            // freq/hold を取らないので、 closure ではなくここで直接ループする。
+            let kit = kit_from_params(&track.instrument.params);
+            for note in &track.notes {
+                let drum_key = match note.pitch.as_drum_key() {
+                    Ok(k) => k,
+                    Err(_) => continue,
+                };
+                let voice = match drum_key {
+                    "kick" => manual::render_drum_kick(kit.as_deref()),
+                    "snare" => manual::render_drum_snare(kit.as_deref()),
+                    "hh_closed" => manual::render_drum_hh(false),
+                    "hh_open" => manual::render_drum_hh(true),
+                    "clap" => manual::render_drum_clap(),
+                    "crash" => manual::render_drum_crash(),
+                    "ride" => manual::render_drum_ride(),
+                    "tom_lo" => manual::render_drum_tom(80.0),
+                    "tom_mid" => manual::render_drum_tom(150.0),
+                    "tom_hi" => manual::render_drum_tom(220.0),
+                    _ => continue,
+                };
+                let start_sample = (note.t * sec_per_beat * sr) as usize;
+                let vel_gain = note.vel as f32 / 127.0;
+                let g = vol * vel_gain;
+                for (i, s) in voice.iter().enumerate() {
+                    let idx = start_sample + i;
+                    if idx >= track_buf.len() {
+                        break;
+                    }
+                    track_buf[idx].0 += s * g * gain_l;
+                    track_buf[idx].1 += s * g * gain_r;
                 }
-                track_buf[idx].0 += s * g * gain_l;
-                track_buf[idx].1 += s * g * gain_r;
+            }
+        } else {
+            // melodic 楽器: 楽器ごとに extra params が違うので closure で受ける
+            // (sin/saw は adsr のみ、 square は pulse_width 追加)。
+            let adsr = AdsrParams::from_params(&track.instrument.params);
+            let render_voice: Box<dyn Fn(f32, f32) -> Vec<f32>> = match kind {
+                "sin" => Box::new(move |f, h| manual::render_voice(f, h, adsr)),
+                "saw" | "saw_lead" => Box::new(move |f, h| manual::render_voice_saw(f, h, adsr)),
+                "square" | "square_bass" => {
+                    let pw = pulse_width_from_params(&track.instrument.params);
+                    Box::new(move |f, h| manual::render_voice_square(f, h, adsr, pw))
+                }
+                "triangle" => Box::new(move |f, h| manual::render_voice_triangle(f, h, adsr)),
+                "saw_pad" => {
+                    let detune = detune_cents_from_params(&track.instrument.params);
+                    Box::new(move |f, h| manual::render_voice_saw_pad(f, h, adsr, detune))
+                }
+                _ => continue, // 未知の type は validate で検出される
+            };
+            for note in &track.notes {
+                let midi = match note.pitch.as_midi() {
+                    Ok(m) => m,
+                    Err(_) => continue,
+                };
+                let freq = midi_to_freq(midi);
+                let start_sample = (note.t * sec_per_beat * sr) as usize;
+                let hold_sec = note.dur * sec_per_beat;
+                let voice = render_voice(freq, hold_sec);
+                let vel_gain = note.vel as f32 / 127.0;
+                let g = vol * vel_gain;
+                for (i, s) in voice.iter().enumerate() {
+                    let idx = start_sample + i;
+                    if idx >= track_buf.len() {
+                        break;
+                    }
+                    track_buf[idx].0 += s * g * gain_l;
+                    track_buf[idx].1 += s * g * gain_r;
+                }
             }
         }
 
@@ -180,6 +218,14 @@ fn detune_cents_from_params(params: &serde_json::Map<String, serde_json::Value>)
         .and_then(|v| v.as_f64())
         .map(|v| v as f32)
         .unwrap_or(10.0)
+}
+
+/// Instrument.params から kit (drum_kit 用) を取り出す。 未指定なら None (= default レシピ)。
+fn kit_from_params(params: &serde_json::Map<String, serde_json::Value>) -> Option<String> {
+    params
+        .get("kit")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
 }
 
 /// equal-power (-3 dB center) パン。 `pan` は -1.0 (L) .. 1.0 (R)。
@@ -266,7 +312,7 @@ mod tests {
     #[test]
     fn unknown_instrument_silently_skipped() {
         let mut s = one_note_song();
-        s.tracks[0].instrument = Instrument::new("drum_kit"); // 現状未実装 (drum_kit は次に追加予定)
+        s.tracks[0].instrument = Instrument::new("unknown_synth"); // 未知 type は無音 (validate 側でエラー出力されるが render は黙ってスキップ)
         let buf = render_to_buffer(&s);
         let peak = buf
             .iter()
@@ -547,6 +593,53 @@ mod tests {
             / (buf.len() - tail_start) as f32)
             .sqrt();
         assert!(tail_rms > 1e-5, "reverb tail should leave audible energy: {tail_rms}");
+    }
+
+    #[test]
+    fn drum_kit_kick_renders_audio() {
+        let mut s = one_note_song();
+        s.tracks[0].instrument = Instrument::new("drum_kit");
+        s.tracks[0].notes[0].pitch = Pitch::Name("kick".into());
+        let buf = render_to_buffer(&s);
+        let peak = buf
+            .iter()
+            .map(|(l, r)| l.abs().max(r.abs()))
+            .fold(0.0_f32, f32::max);
+        assert!(peak > 0.1, "drum_kit kick should produce audible output, got {peak}");
+    }
+
+    #[test]
+    fn drum_kit_unknown_key_silently_skipped() {
+        let mut s = one_note_song();
+        s.tracks[0].instrument = Instrument::new("drum_kit");
+        s.tracks[0].notes[0].pitch = Pitch::Name("zap".into()); // validate でエラー扱いだが render は黙ってスキップ
+        let buf = render_to_buffer(&s);
+        let peak = buf
+            .iter()
+            .map(|(l, r)| l.abs().max(r.abs()))
+            .fold(0.0_f32, f32::max);
+        assert_eq!(peak, 0.0);
+    }
+
+    #[test]
+    fn drum_kit_kit_param_changes_output() {
+        // kit="909" と kit=未指定 (default) で kick の出力が変わる
+        let mut s = one_note_song();
+        s.tracks[0].instrument = Instrument::new("drum_kit");
+        s.tracks[0].notes[0].pitch = Pitch::Name("kick".into());
+        let buf_default = render_to_buffer(&s);
+
+        let mut inst = Instrument::new("drum_kit");
+        inst.params.insert("kit".into(), serde_json::json!("909"));
+        s.tracks[0].instrument = inst;
+        let buf_909 = render_to_buffer(&s);
+
+        let diff: usize = buf_default
+            .iter()
+            .zip(buf_909.iter())
+            .filter(|(a, b)| (a.0 - b.0).abs() > 0.001)
+            .count();
+        assert!(diff > 100, "kit param should change kick waveform: diff={diff}");
     }
 
     #[test]
