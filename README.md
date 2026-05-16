@@ -8,7 +8,28 @@ MCP (Model Context Protocol) 統合により、AI が一級市民として作曲
 
 ## ステータス
 
-🚧 **設計フェーズ (Phase 0 開始前)** — 公開リリースは Phase 4 (`docs/design/00-vision.md` 参照)
+🚧 **Phase 1 進行中** — CLI (`codetta build` / `render` / `validate` 等) と MCP server (15 tools + 5 resources) が動作。公開リリースは Phase 4 (`docs/design/00-vision.md` 参照)
+
+## MCP server (Claude Code 等のクライアント向け)
+
+LLM クライアントから Codetta を直接呼び出すための MCP server を同梱しています。
+
+```bash
+# CLI と MCP server をビルド
+cargo build --release -p codetta-cli
+npm install --prefix mcp-server && npm run build --prefix mcp-server
+
+# Claude Code に user scope で登録
+claude mcp add --scope user codetta \
+  --env CODETTA_BIN=/absolute/path/to/codetta/target/release/codetta \
+  --env CODETTA_WORKSPACE=$HOME/codetta-workspace \
+  -- node /absolute/path/to/codetta/mcp-server/dist/index.js
+```
+
+- `CODETTA_BIN`: CLI 実行ファイルの絶対パス (MCP server から subprocess として呼び出される)
+- `CODETTA_WORKSPACE`: LLM が `.codetta` / `.wav` を読み書きする作業ディレクトリ (未存在なら自動作成)
+
+Claude Desktop 用設定、tool / resource 一覧、smoke test の手順等は **[mcp-server/README.md](mcp-server/README.md)** を参照。
 
 ## 設計ドキュメント
 
