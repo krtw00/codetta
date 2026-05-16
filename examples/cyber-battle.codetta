@@ -1,0 +1,73 @@
+{
+  "version": "0.1",
+  "metadata": {
+    "name": "Cyber Battle Loop",
+    "bpm": 140,
+    "key": "Am",
+    "time_signature": [4, 4],
+    "tags": ["ddc", "battle", "cyber"]
+  },
+  "tracks": [
+    {
+      "id": "lead",
+      "name": "Saw Lead",
+      "instrument": {
+        "type": "saw_lead",
+        "params": {
+          "attack": 0.01,
+          "decay": 0.1,
+          "sustain": 0.7,
+          "release": 0.2,
+          "filter_cutoff": 1200,
+          "filter_q": 2.0
+        }
+      },
+      "volume": 0.7,
+      "pan": 0.0,
+      "fx": [
+        { "type": "delay", "time": "1/8", "feedback": 0.3, "mix": 0.25 },
+        { "type": "reverb", "size": 0.5, "mix": 0.2 }
+      ],
+      "notes": [
+        { "t": 0.0, "pitch": "A4", "dur": 0.5, "vel": 100 },
+        { "t": 0.5, "pitch": "C5", "dur": 0.5, "vel": 100 },
+        { "t": 1.0, "pitch": "E5", "dur": 0.5, "vel": 110 },
+        { "t": 1.5, "pitch": "A5", "dur": 1.0, "vel": 115 },
+        { "t": 4.0, "pitch": "G5", "dur": 0.5, "vel": 100 },
+        { "t": 4.5, "pitch": "E5", "dur": 0.5, "vel": 100 },
+        { "t": 5.0, "pitch": "C5", "dur": 1.5, "vel": 110 }
+      ]
+    },
+    {
+      "id": "bass",
+      "name": "Sub Bass",
+      "instrument": {
+        "type": "sin",
+        "params": { "attack": 0.005, "decay": 0.1, "sustain": 0.9, "release": 0.1 }
+      },
+      "volume": 0.9,
+      "notes": [
+        { "t": 0.0, "pitch": "A2", "dur": 1.0, "vel": 100 },
+        { "t": 2.0, "pitch": "F2", "dur": 1.0, "vel": 100 },
+        { "t": 4.0, "pitch": "G2", "dur": 1.0, "vel": 100 },
+        { "t": 6.0, "pitch": "E2", "dur": 1.0, "vel": 100 }
+      ]
+    },
+    {
+      "id": "drums",
+      "name": "Drums",
+      "instrument": { "type": "drum_kit", "params": { "kit": "808" } },
+      "volume": 0.8,
+      "notes": [
+        { "t": 0.0, "pitch": "kick",      "dur": 0.1, "vel": 110 },
+        { "t": 1.0, "pitch": "snare",     "dur": 0.1, "vel": 100 },
+        { "t": 2.0, "pitch": "kick",      "dur": 0.1, "vel": 110 },
+        { "t": 3.0, "pitch": "snare",     "dur": 0.1, "vel": 100 },
+        { "t": 0.0, "pitch": "hh_closed", "dur": 0.1, "vel": 70 },
+        { "t": 0.5, "pitch": "hh_closed", "dur": 0.1, "vel": 70 },
+        { "t": 1.0, "pitch": "hh_closed", "dur": 0.1, "vel": 70 },
+        { "t": 1.5, "pitch": "hh_closed", "dur": 0.1, "vel": 70 }
+      ]
+    }
+  ]
+}
