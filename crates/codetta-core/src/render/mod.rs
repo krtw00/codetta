@@ -10,15 +10,16 @@
 //!
 //! - 楽器: `sin` / `saw` / `saw_lead` / `square` / `square_bass` / `triangle` / `saw_pad` (他はスキップして無音)
 //! - サンプルレート: 44.1kHz / ビット深度: 16bit / stereo
-//! - エフェクト: 未実装 (track.fx は無視)
+//! - エフェクト: `lowpass` / `highpass` / `distortion` / `delay` を track.fx として適用 (順序通り)。 `reverb` は未対応
 //! - `--from` / `--to` トリミング: 未対応 (CLI 側で beat → samples 変換時に slice)
 
 use std::path::Path;
 
 use hound::{SampleFormat, WavSpec, WavWriter};
 
+use crate::effect;
 use crate::error::CodettaError;
-use crate::model::Song;
+use crate::model::{Effect, Song};
 use crate::synth::{manual, midi_to_freq, AdsrParams, SAMPLE_RATE};
 
 /// Song を WAV ファイルに書き出す。 出力時の経過秒数 (実時間) は返さない —
@@ -46,6 +47,9 @@ pub struct RenderStats {
 }
 
 /// Song → ステレオ f32 サンプル列 (interleave なし、 `(L, R)` の Vec)。
+///
+/// 信号フロー: 各トラックを mono voice → stereo (pan + volume) で per-track buffer に書き出し →
+/// `track.fx` を順次適用 → master に加算 → soft limiter。
 pub fn render_to_buffer(song: &Song) -> Vec<(f32, f32)> {
     let sr = SAMPLE_RATE as f32;
     let bpm = song.metadata.bpm.max(1) as f32;
@@ -80,6 +84,8 @@ pub fn render_to_buffer(song: &Song) -> Vec<(f32, f32)> {
         let (gain_l, gain_r) = pan_gains(track.pan);
         let vol = track.volume;
 
+        // per-track buffer に書き出し
+        let mut track_buf = vec![(0.0_f32, 0.0_f32); total_samples];
         for note in &track.notes {
             let midi = match note.pitch.as_midi() {
                 Ok(m) => m,
@@ -93,12 +99,23 @@ pub fn render_to_buffer(song: &Song) -> Vec<(f32, f32)> {
             let g = vol * vel_gain;
             for (i, s) in voice.iter().enumerate() {
                 let idx = start_sample + i;
-                if idx >= master.len() {
+                if idx >= track_buf.len() {
                     break;
                 }
-                master[idx].0 += s * g * gain_l;
-                master[idx].1 += s * g * gain_r;
+                track_buf[idx].0 += s * g * gain_l;
+                track_buf[idx].1 += s * g * gain_r;
             }
+        }
+
+        // fx chain (順序通り適用)
+        for fx in &track.fx {
+            apply_effect(&mut track_buf, fx, song.metadata.bpm);
+        }
+
+        // master に加算
+        for (m, t) in master.iter_mut().zip(track_buf.iter()) {
+            m.0 += t.0;
+            m.1 += t.1;
         }
     }
 
@@ -108,6 +125,37 @@ pub fn render_to_buffer(song: &Song) -> Vec<(f32, f32)> {
         *r = soft_clip(*r);
     }
     master
+}
+
+/// `Effect` を 1 つ、 in-place で適用する。 未実装 type (現状 `reverb`) は黙ってスキップ。
+fn apply_effect(buf: &mut [(f32, f32)], fx: &Effect, bpm: u32) {
+    match fx.kind.as_str() {
+        "lowpass" => {
+            let cutoff = fx.params.get("cutoff").and_then(|v| v.as_f64()).unwrap_or(1000.0) as f32;
+            let q = fx.params.get("q").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
+            effect::lowpass(buf, cutoff, q, SAMPLE_RATE);
+        }
+        "highpass" => {
+            let cutoff = fx.params.get("cutoff").and_then(|v| v.as_f64()).unwrap_or(1000.0) as f32;
+            let q = fx.params.get("q").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
+            effect::highpass(buf, cutoff, q, SAMPLE_RATE);
+        }
+        "distortion" => {
+            let amount = fx.params.get("amount").and_then(|v| v.as_f64()).unwrap_or(0.3) as f32;
+            let tone = fx.params.get("tone").and_then(|v| v.as_f64()).unwrap_or(0.5) as f32;
+            effect::distortion(buf, amount, tone, SAMPLE_RATE);
+        }
+        "delay" => {
+            let default_time = serde_json::json!("1/8");
+            let time_spec = fx.params.get("time").unwrap_or(&default_time);
+            let time_sec = effect::parse_delay_time(time_spec, bpm);
+            let feedback = fx.params.get("feedback").and_then(|v| v.as_f64()).unwrap_or(0.3) as f32;
+            let mix = fx.params.get("mix").and_then(|v| v.as_f64()).unwrap_or(0.25) as f32;
+            effect::delay(buf, time_sec, feedback, mix, SAMPLE_RATE);
+        }
+        // "reverb" は次セッション。 未知の type は validate で検出される。
+        _ => {}
+    }
 }
 
 /// Instrument.params から pulse_width (square/pulse 用) を取り出す。 デフォルト 0.5、 範囲 0.05-0.95。
@@ -338,6 +386,135 @@ mod tests {
         assert!(l > 0.99 && r < 0.01);
         let (l, r) = pan_gains(1.0);
         assert!(r > 0.99 && l < 0.01);
+    }
+
+    #[test]
+    fn lowpass_fx_attenuates_high_freq_track() {
+        // saw (倍音豊富) に 500Hz lowpass を被せると RMS が下がるはず
+        let mut s = one_note_song();
+        s.tracks[0].instrument = Instrument::new("saw");
+        let dry = render_to_buffer(&s);
+        s.tracks[0].fx.push(crate::model::Effect {
+            kind: "lowpass".into(),
+            params: {
+                let mut m = serde_json::Map::new();
+                m.insert("cutoff".into(), serde_json::json!(500.0));
+                m.insert("q".into(), serde_json::json!(0.7));
+                m
+            },
+        });
+        let wet = render_to_buffer(&s);
+        let rms_dry: f32 = (dry.iter().map(|(l, _)| l * l).sum::<f32>() / dry.len() as f32).sqrt();
+        let rms_wet: f32 = (wet.iter().map(|(l, _)| l * l).sum::<f32>() / wet.len() as f32).sqrt();
+        // 倍音が削れるので RMS は明確に下がる (= 少なくとも 80%)
+        assert!(
+            rms_wet < rms_dry * 0.95,
+            "lowpass should attenuate saw harmonics: dry={rms_dry} wet={rms_wet}"
+        );
+        // でも消えてはいない
+        assert!(rms_wet > 0.01, "lowpass should not silence the track: {rms_wet}");
+    }
+
+    #[test]
+    fn distortion_fx_changes_waveform() {
+        // distortion(amount=1) で出力ピークが圧縮される (元 saw のピーク値より低くなる)
+        let mut s = one_note_song();
+        s.tracks[0].instrument = Instrument::new("saw");
+        s.tracks[0].volume = 0.4;
+        let dry = render_to_buffer(&s);
+        s.tracks[0].fx.push(crate::model::Effect {
+            kind: "distortion".into(),
+            params: {
+                let mut m = serde_json::Map::new();
+                m.insert("amount".into(), serde_json::json!(1.0));
+                m.insert("tone".into(), serde_json::json!(0.5));
+                m
+            },
+        });
+        let wet = render_to_buffer(&s);
+        let peak_dry = dry.iter().map(|(l, _)| l.abs()).fold(0.0_f32, f32::max);
+        let peak_wet = wet.iter().map(|(l, _)| l.abs()).fold(0.0_f32, f32::max);
+        // dry/wet の波形が変わっていれば OK (どちらが大きいかは tanh の make_up に依存するが、 サンプル単位で差があるはず)
+        let diff_count = dry
+            .iter()
+            .zip(wet.iter())
+            .filter(|(d, w)| (d.0 - w.0).abs() > 0.01)
+            .count();
+        assert!(
+            diff_count > 100,
+            "distortion should change samples: diff_count={diff_count} peak_dry={peak_dry} peak_wet={peak_wet}"
+        );
+    }
+
+    #[test]
+    fn delay_fx_extends_tail() {
+        // 短いノートに delay (feedback>0、 mix>0) をかけると、 ノート末尾以降に音が残る
+        let mut s = one_note_song();
+        // note.dur=0.5 beat、 bpm=120 → 0.25 秒。 余韻 2 秒も含まれるが、 1 秒地点での RMS で確認
+        s.tracks[0].fx.push(crate::model::Effect {
+            kind: "delay".into(),
+            params: {
+                let mut m = serde_json::Map::new();
+                m.insert("time".into(), serde_json::json!("1/8"));
+                m.insert("feedback".into(), serde_json::json!(0.6));
+                m.insert("mix".into(), serde_json::json!(0.5));
+                m
+            },
+        });
+        let buf = render_to_buffer(&s);
+        // 1.5 秒以降のサンプル (delay echo が残る範囲) を確認
+        let tail_start = (1.5 * SAMPLE_RATE as f32) as usize;
+        if tail_start < buf.len() {
+            let tail_rms: f32 = (buf[tail_start..]
+                .iter()
+                .map(|(l, _)| l * l)
+                .sum::<f32>()
+                / (buf.len() - tail_start) as f32)
+                .sqrt();
+            assert!(tail_rms > 1e-4, "delay echo should leave audible tail: {tail_rms}");
+        }
+    }
+
+    #[test]
+    fn fx_chain_applied_in_order() {
+        // lowpass(500Hz、 倍音削減) → distortion(amount=1、 強 saturate) と
+        // distortion → lowpass では saturate される波形が違うので、 結果は明確に違う。
+        let mut s_dl = one_note_song();
+        s_dl.tracks[0].instrument = Instrument::new("saw");
+        s_dl.tracks[0].notes[0].dur = 2.0; // hold を長く取って fx の効果が乗る区間を確保
+        s_dl.tracks[0].fx = vec![
+            crate::model::Effect {
+                kind: "distortion".into(),
+                params: {
+                    let mut m = serde_json::Map::new();
+                    m.insert("amount".into(), serde_json::json!(1.0));
+                    m.insert("tone".into(), serde_json::json!(0.5));
+                    m
+                },
+            },
+            crate::model::Effect {
+                kind: "lowpass".into(),
+                params: {
+                    let mut m = serde_json::Map::new();
+                    m.insert("cutoff".into(), serde_json::json!(500.0));
+                    m.insert("q".into(), serde_json::json!(0.7));
+                    m
+                },
+            },
+        ];
+        let mut s_ld = s_dl.clone();
+        s_ld.tracks[0].fx.swap(0, 1); // lowpass → distortion
+        let buf_dl = render_to_buffer(&s_dl);
+        let buf_ld = render_to_buffer(&s_ld);
+        let diff: usize = buf_dl
+            .iter()
+            .zip(buf_ld.iter())
+            .filter(|(a, b)| (a.0 - b.0).abs() > 0.001)
+            .count();
+        assert!(
+            diff > 100,
+            "fx order should matter (distortion→lowpass vs lowpass→distortion), diff={diff}"
+        );
     }
 
     #[test]

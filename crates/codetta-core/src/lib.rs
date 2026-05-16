@@ -7,6 +7,7 @@
 //! オシレータでの WAV レンダリング。 他のオシレータ / フィルタ / ドラム / MIDI I/O は続く実装で。
 
 pub mod edit;
+pub mod effect;
 pub mod error;
 pub mod io;
 pub mod model;
