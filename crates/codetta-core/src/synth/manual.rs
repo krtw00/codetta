@@ -1,7 +1,7 @@
 //! 自前ループ実装の 1 voice (オシレータ + ADSR)。
 //!
 //! `fundsp` を使わずに済むかを判断するための「自前版」プロトタイプ。
-//! 現状は `sin` / `saw` / `square` (PolyBLEP) / `triangle` (解析式) を実装済み。 残り saw_pad は順次追加。
+//! 現状は `sin` / `saw` / `square` (PolyBLEP) / `triangle` (解析式) / `saw_pad` (saw × 3 detune) を実装済み。
 //!
 //! Envelope 曲線は線形セグメント。 sound.md は「指数」を最終形と書いているが、
 //! Phase 0 first cut は線形で十分音になる (差し替えは Phase 1+)。
@@ -136,6 +136,44 @@ pub fn render_voice_triangle(freq_hz: f32, hold_sec: f32, adsr: AdsrParams) -> V
         if phase >= 1.0 {
             phase -= 1.0;
         }
+    }
+    out
+}
+
+/// 1 ノート分の saw × 3 detune (saw_pad) + ADSR を生成し、 mono バッファとして返す。
+///
+/// 中央 voice (freq そのまま) + `+detune_cents` voice + `-detune_cents` voice を 1/3 ずつ合成。
+/// 各 voice は `render_voice_saw` と同じ PolyBLEP 補正を適用。 セントから比へは `2^(cents/1200)`。
+/// `detune_cents` は 0-50 にクランプ (sound.md の範囲)。 0 のときは事実上 saw 単音 (3 つ揃って同位相に
+/// 走るので干渉なし)。 ハーモニカルな厚みを得るのが目的なので、 デフォルト 10 セントで十分なうねりが出る。
+///
+/// alloc 削減のため `render_voice_saw` を 3 回呼ぶのではなく 1 ループ内で 3 位相を進める。
+pub fn render_voice_saw_pad(
+    freq_hz: f32,
+    hold_sec: f32,
+    adsr: AdsrParams,
+    detune_cents: f32,
+) -> Vec<f32> {
+    let sr = SAMPLE_RATE as f32;
+    let cents = detune_cents.clamp(0.0, 50.0);
+    let ratio = 2.0_f32.powf(cents / 1200.0);
+    let freqs = [freq_hz / ratio, freq_hz, freq_hz * ratio];
+    let dts = [freqs[0] / sr, freqs[1] / sr, freqs[2] / sr];
+    let env = build_envelope(hold_sec, adsr);
+    let mut phases = [0.0_f32; 3];
+    let mut out = Vec::with_capacity(env.len());
+
+    for &e in &env {
+        let mut y = 0.0_f32;
+        for k in 0..3 {
+            let naive = 2.0 * phases[k] - 1.0;
+            y += naive - polyblep(phases[k], dts[k]);
+            phases[k] += dts[k];
+            if phases[k] >= 1.0 {
+                phases[k] -= 1.0;
+            }
+        }
+        out.push((y / 3.0) * e);
     }
     out
 }
@@ -320,6 +358,70 @@ mod tests {
             - v.iter().cloned().fold(0.0_f32, f32::min);
         // 解析式そのままなのでほぼ ±1 まで届く
         assert!(span > 1.8, "triangle peak-to-peak too small: {span}");
+    }
+
+    #[test]
+    fn saw_pad_voice_length_matches_hold_plus_release() {
+        let adsr = AdsrParams {
+            attack: 0.0,
+            decay: 0.0,
+            sustain: 1.0,
+            release: 0.1,
+        };
+        let v = render_voice_saw_pad(440.0, 0.5, adsr, 10.0);
+        let expected = (0.5 * SAMPLE_RATE as f32) as usize + (0.1 * SAMPLE_RATE as f32) as usize;
+        assert_eq!(v.len(), expected);
+    }
+
+    #[test]
+    fn saw_pad_voice_ends_near_zero() {
+        let v = render_voice_saw_pad(440.0, 0.05, AdsrParams::default(), 10.0);
+        let last = *v.last().unwrap();
+        assert!(last.abs() < 0.05, "release tail should be near zero, got {last}");
+    }
+
+    #[test]
+    fn saw_pad_voice_amplitude_within_unit() {
+        let v = render_voice_saw_pad(440.0, 0.1, AdsrParams::default(), 10.0);
+        let max = v.iter().cloned().fold(0.0_f32, f32::max);
+        let min = v.iter().cloned().fold(0.0_f32, f32::min);
+        // 3 voice を 1/3 ずつ合成しているので最悪でも ±1 に収まる
+        assert!(max <= 1.0 && min >= -1.0, "out of range: [{min}, {max}]");
+        // detune してもメインの saw が振り切るタイミングがあるので両極に届く
+        assert!(max > 0.4 && min < -0.4, "saw_pad should swing wide: [{min}, {max}]");
+    }
+
+    #[test]
+    fn saw_pad_detune_cents_clamped() {
+        // 100 セント要求 → 50 にクランプされてもクラッシュせず音が出る
+        let adsr = AdsrParams {
+            attack: 0.0,
+            decay: 0.0,
+            sustain: 1.0,
+            release: 0.0,
+        };
+        let v = render_voice_saw_pad(220.0, 0.05, adsr, 100.0);
+        let span = v.iter().cloned().fold(0.0_f32, f32::max)
+            - v.iter().cloned().fold(0.0_f32, f32::min);
+        assert!(span > 1.0, "saw_pad with extreme detune should still oscillate: {span}");
+    }
+
+    #[test]
+    fn saw_pad_zero_detune_matches_single_saw_shape() {
+        // detune_cents = 0 のとき 3 voice が同位相に走るので、 出力は単音 saw とほぼ同じ波形
+        // (1/3 + 1/3 + 1/3 = 1.0)。 サンプル単位の許容誤差は PolyBLEP の浮動小数演算順序差のみ。
+        let adsr = AdsrParams {
+            attack: 0.0,
+            decay: 0.0,
+            sustain: 1.0,
+            release: 0.0,
+        };
+        let pad = render_voice_saw_pad(220.0, 0.05, adsr, 0.0);
+        let saw = render_voice_saw(220.0, 0.05, adsr);
+        assert_eq!(pad.len(), saw.len());
+        for (p, s) in pad.iter().zip(saw.iter()) {
+            assert!((p - s).abs() < 1e-4, "expected equivalence at zero detune: {p} vs {s}");
+        }
     }
 
     #[test]

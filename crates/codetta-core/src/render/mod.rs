@@ -8,7 +8,7 @@
 //!
 //! Phase 0 first cut のサポート:
 //!
-//! - 楽器: `sin` / `saw` / `saw_lead` / `square` / `square_bass` / `triangle` (他はスキップして無音)
+//! - 楽器: `sin` / `saw` / `saw_lead` / `square` / `square_bass` / `triangle` / `saw_pad` (他はスキップして無音)
 //! - サンプルレート: 44.1kHz / ビット深度: 16bit / stereo
 //! - エフェクト: 未実装 (track.fx は無視)
 //! - `--from` / `--to` トリミング: 未対応 (CLI 側で beat → samples 変換時に slice)
@@ -71,7 +71,11 @@ pub fn render_to_buffer(song: &Song) -> Vec<(f32, f32)> {
                 Box::new(move |f, h| manual::render_voice_square(f, h, adsr, pw))
             }
             "triangle" => Box::new(move |f, h| manual::render_voice_triangle(f, h, adsr)),
-            _ => continue, // 未実装 (saw_pad / drum_kit はまだ無音)
+            "saw_pad" => {
+                let detune = detune_cents_from_params(&track.instrument.params);
+                Box::new(move |f, h| manual::render_voice_saw_pad(f, h, adsr, detune))
+            }
+            _ => continue, // 未実装 (drum_kit はまだ無音)
         };
         let (gain_l, gain_r) = pan_gains(track.pan);
         let vol = track.volume;
@@ -113,6 +117,15 @@ fn pulse_width_from_params(params: &serde_json::Map<String, serde_json::Value>) 
         .and_then(|v| v.as_f64())
         .map(|v| v as f32)
         .unwrap_or(0.5)
+}
+
+/// Instrument.params から detune_cents (saw_pad 用) を取り出す。 デフォルト 10 (sound.md)。
+fn detune_cents_from_params(params: &serde_json::Map<String, serde_json::Value>) -> f32 {
+    params
+        .get("detune_cents")
+        .and_then(|v| v.as_f64())
+        .map(|v| v as f32)
+        .unwrap_or(10.0)
 }
 
 /// equal-power (-3 dB center) パン。 `pan` は -1.0 (L) .. 1.0 (R)。
@@ -199,13 +212,40 @@ mod tests {
     #[test]
     fn unknown_instrument_silently_skipped() {
         let mut s = one_note_song();
-        s.tracks[0].instrument = Instrument::new("saw_pad"); // 現状未実装 (saw_pad は次に追加予定)
+        s.tracks[0].instrument = Instrument::new("drum_kit"); // 現状未実装 (drum_kit は次に追加予定)
         let buf = render_to_buffer(&s);
         let peak = buf
             .iter()
             .map(|(l, r)| l.abs().max(r.abs()))
             .fold(0.0_f32, f32::max);
         assert_eq!(peak, 0.0);
+    }
+
+    #[test]
+    fn saw_pad_renders_audio() {
+        let mut s = one_note_song();
+        s.tracks[0].instrument = Instrument::new("saw_pad");
+        let buf = render_to_buffer(&s);
+        let peak = buf
+            .iter()
+            .map(|(l, r)| l.abs().max(r.abs()))
+            .fold(0.0_f32, f32::max);
+        assert!(peak > 0.1, "saw_pad should produce audible output, got {peak}");
+    }
+
+    #[test]
+    fn saw_pad_detune_cents_respected() {
+        // detune_cents を変えても音は出る (params 取り出し→ closure→ render の経路が落ちないこと)
+        let mut s = one_note_song();
+        let mut inst = Instrument::new("saw_pad");
+        inst.params.insert("detune_cents".into(), serde_json::json!(25.0));
+        s.tracks[0].instrument = inst;
+        let buf = render_to_buffer(&s);
+        let peak = buf
+            .iter()
+            .map(|(l, r)| l.abs().max(r.abs()))
+            .fold(0.0_f32, f32::max);
+        assert!(peak > 0.1, "saw_pad with custom detune should still produce audio, got {peak}");
     }
 
     #[test]
