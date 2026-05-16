@@ -1,0 +1,27 @@
+# Rust
+/target
+**/target
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+*.swp
+*.bak
+.idea/
+.vscode/
+
+# Node (mcp-server)
+node_modules/
+dist/
+
+# Project artifacts (生成物は git 管理外)
+*.wav
+*.mp3
+*.mid
+!docs/examples/**/*.mid
+
+# Local sessions (CLAUDE.md ルール: 個人参照のみ)
+HANDOFF.md
+docs/sessions/
