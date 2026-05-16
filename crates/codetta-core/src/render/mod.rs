@@ -8,7 +8,7 @@
 //!
 //! Phase 0 first cut のサポート:
 //!
-//! - 楽器: `sin` のみ (他はスキップして無音)
+//! - 楽器: `sin` / `saw` / `saw_lead` (他はスキップして無音)
 //! - サンプルレート: 44.1kHz / ビット深度: 16bit / stereo
 //! - エフェクト: 未実装 (track.fx は無視)
 //! - `--from` / `--to` トリミング: 未対応 (CLI 側で beat → samples 変換時に slice)
@@ -57,9 +57,15 @@ pub fn render_to_buffer(song: &Song) -> Vec<(f32, f32)> {
     let mut master = vec![(0.0_f32, 0.0_f32); total_samples];
 
     for track in &song.tracks {
-        if track.mute || track.instrument.kind != "sin" {
+        if track.mute {
             continue;
         }
+        let kind = track.instrument.kind.as_str();
+        let render_voice: fn(f32, f32, AdsrParams) -> Vec<f32> = match kind {
+            "sin" => manual::render_voice,
+            "saw" | "saw_lead" => manual::render_voice_saw,
+            _ => continue, // 未実装 (square / triangle / saw_pad / drum_kit はまだ無音)
+        };
         let adsr = AdsrParams::from_params(&track.instrument.params);
         let (gain_l, gain_r) = pan_gains(track.pan);
         let vol = track.volume;
@@ -72,7 +78,7 @@ pub fn render_to_buffer(song: &Song) -> Vec<(f32, f32)> {
             let freq = midi_to_freq(midi);
             let start_sample = (note.t * sec_per_beat * sr) as usize;
             let hold_sec = note.dur * sec_per_beat;
-            let voice = manual::render_voice(freq, hold_sec, adsr);
+            let voice = render_voice(freq, hold_sec, adsr);
             let vel_gain = note.vel as f32 / 127.0;
             let g = vol * vel_gain;
             for (i, s) in voice.iter().enumerate() {
@@ -178,13 +184,37 @@ mod tests {
     #[test]
     fn unknown_instrument_silently_skipped() {
         let mut s = one_note_song();
-        s.tracks[0].instrument = Instrument::new("saw_lead"); // Phase 0 first cut では未実装
+        s.tracks[0].instrument = Instrument::new("square"); // 現状未実装 (square は次に追加予定)
         let buf = render_to_buffer(&s);
         let peak = buf
             .iter()
             .map(|(l, r)| l.abs().max(r.abs()))
             .fold(0.0_f32, f32::max);
         assert_eq!(peak, 0.0);
+    }
+
+    #[test]
+    fn saw_lead_renders_audio() {
+        let mut s = one_note_song();
+        s.tracks[0].instrument = Instrument::new("saw_lead");
+        let buf = render_to_buffer(&s);
+        let peak = buf
+            .iter()
+            .map(|(l, r)| l.abs().max(r.abs()))
+            .fold(0.0_f32, f32::max);
+        assert!(peak > 0.1, "saw_lead should produce audible output, got {peak}");
+    }
+
+    #[test]
+    fn saw_alias_also_renders() {
+        let mut s = one_note_song();
+        s.tracks[0].instrument = Instrument::new("saw");
+        let buf = render_to_buffer(&s);
+        let peak = buf
+            .iter()
+            .map(|(l, r)| l.abs().max(r.abs()))
+            .fold(0.0_f32, f32::max);
+        assert!(peak > 0.1, "saw should produce audible output, got {peak}");
     }
 
     #[test]
