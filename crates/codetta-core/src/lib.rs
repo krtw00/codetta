@@ -16,10 +16,10 @@ pub mod synth;
 pub mod validate;
 
 pub use edit::{
-    add_notes, add_track, clear_notes, edit_notes, remove_track, set_fx, set_instrument,
-    set_notes, track_mut, EditNotesStats, NoteOp,
+    add_notes, add_track, clear_notes, edit_notes, remove_track, set_fx, set_instrument, set_notes,
+    track_mut, EditNotesStats, NoteOp,
 };
-pub use error::{CodettaError, ValidationError};
+pub use error::{CodettaError, Severity, ValidationError};
 pub use io::{load, save};
 pub use model::{Effect, Instrument, Metadata, Note, Pitch, Song, Track};
 pub use render::{render_to_buffer, render_to_wav, RenderStats};

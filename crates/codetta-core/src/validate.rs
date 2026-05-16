@@ -22,9 +22,36 @@ pub const KNOWN_EFFECT_TYPES: &[&str] = &["lowpass", "highpass", "delay", "rever
 
 /// drum_kit トラックで使えるピッチ名 (GM Drum 互換キー)。
 pub const KNOWN_DRUM_KEYS: &[&str] = &[
-    "kick", "snare", "hh_closed", "hh_open", "clap", "crash", "ride", "tom_lo", "tom_mid",
+    "kick",
+    "snare",
+    "hh_closed",
+    "hh_open",
+    "clap",
+    "crash",
+    "ride",
+    "tom_lo",
+    "tom_mid",
     "tom_hi",
 ];
+
+/// ADSR 共通パラメータ。 オシレータ系で共有。
+const ADSR_PARAM_KEYS: &[&str] = &["attack", "decay", "sustain", "release"];
+
+/// 楽器 type ごとに「認識される (= レンダリングで実際に使われる) param キー一覧」を返す。
+///
+/// 未知 type は `None`。 認識外キーは validate で `UNKNOWN_PARAM` Warning として報告する。
+/// 追記時の責務: `crates/codetta-cli/src/main.rs::instrument_catalog()` の params keys と
+/// 一致させる (sync test `catalog_params_match_instrument_param_keys` で保証)。
+pub fn instrument_param_keys(kind: &str) -> Option<&'static [&'static str]> {
+    match kind {
+        "sin" | "saw" | "saw_lead" | "triangle" => Some(ADSR_PARAM_KEYS),
+        "square" | "square_bass" => Some(&["attack", "decay", "sustain", "release", "pulse_width"]),
+        "saw_pad" => Some(&["attack", "decay", "sustain", "release", "detune_cents"]),
+        "drum_kit" => Some(&["kit"]),
+        "soundfont" => Some(&["file", "preset", "bank"]),
+        _ => None,
+    }
+}
 
 /// 楽曲全体を検証し、 違反を列挙する。 空 Vec なら整合性 OK。
 ///
@@ -125,6 +152,22 @@ pub fn validate(song: &Song) -> Vec<ValidationError> {
                             ),
                         ));
                     }
+                }
+            }
+        }
+
+        // instrument params: 認識されない (= レンダリングで無視される) キーを警告
+        if let Some(known) = instrument_param_keys(&track.instrument.kind) {
+            for key in track.instrument.params.keys() {
+                if !known.iter().any(|k| k == key) {
+                    errors.push(ValidationError::warning(
+                        "UNKNOWN_PARAM",
+                        format!("{tprefix}.instrument.params.{key}"),
+                        format!(
+                            "param {key:?} is not recognized by instrument {:?} and will be ignored at render time (known params: {known:?})",
+                            track.instrument.kind
+                        ),
+                    ));
                 }
             }
         }
@@ -287,7 +330,9 @@ mod tests {
         let mut s = ok_song();
         s.tracks[0].notes[0].pitch = Pitch::Name("Q4".into());
         let errs = validate(&s);
-        assert!(errs.iter().any(|e| e.code == "INVALID_NOTE" && e.path.ends_with(".pitch")));
+        assert!(errs
+            .iter()
+            .any(|e| e.code == "INVALID_NOTE" && e.path.ends_with(".pitch")));
     }
 
     #[test]
@@ -310,20 +355,27 @@ mod tests {
         let mut s = ok_song();
         s.tracks[0].instrument = Instrument::new("soundfont");
         let errs = validate(&s);
-        assert!(errs.iter().any(|e|
-            e.code == "INVALID_SCHEMA" && e.path.ends_with(".instrument.params")
-        ), "expected missing-file error, got: {errs:?}");
+        assert!(
+            errs.iter()
+                .any(|e| e.code == "INVALID_SCHEMA" && e.path.ends_with(".instrument.params")),
+            "expected missing-file error, got: {errs:?}"
+        );
     }
 
     #[test]
     fn soundfont_track_reports_missing_file() {
         let mut s = ok_song();
         let mut inst = Instrument::new("soundfont");
-        inst.params.insert("file".into(), serde_json::json!("/nonexistent/codetta-test/abs.sf2"));
+        inst.params.insert(
+            "file".into(),
+            serde_json::json!("/nonexistent/codetta-test/abs.sf2"),
+        );
         s.tracks[0].instrument = inst;
         let errs = validate(&s);
-        assert!(errs.iter().any(|e| e.code == "SOUNDFONT_FILE_NOT_FOUND"),
-            "expected SOUNDFONT_FILE_NOT_FOUND, got: {errs:?}");
+        assert!(
+            errs.iter().any(|e| e.code == "SOUNDFONT_FILE_NOT_FOUND"),
+            "expected SOUNDFONT_FILE_NOT_FOUND, got: {errs:?}"
+        );
     }
 
     #[test]
@@ -334,5 +386,89 @@ mod tests {
         let errs = validate(&s);
         assert!(errs.iter().any(|e| e.path.ends_with(".t")));
         assert!(errs.iter().any(|e| e.path.ends_with(".dur")));
+    }
+
+    #[test]
+    fn warns_on_unknown_param_for_saw() {
+        // saw は ADSR のみ受け取る。 pulse_width は square 系の param なので warn
+        let mut s = ok_song();
+        s.tracks[0].instrument = Instrument::new("saw");
+        s.tracks[0]
+            .instrument
+            .params
+            .insert("pulse_width".into(), serde_json::json!(0.3));
+        let errs = validate(&s);
+        let warn = errs.iter().find(|e| e.code == "UNKNOWN_PARAM");
+        assert!(
+            warn.is_some(),
+            "expected UNKNOWN_PARAM warning, got: {errs:?}"
+        );
+        let w = warn.unwrap();
+        assert!(
+            w.is_warning(),
+            "expected severity=warning, got: {:?}",
+            w.severity
+        );
+        assert!(w.path.ends_with(".instrument.params.pulse_width"));
+        // error 級は出ない
+        assert!(
+            !errs.iter().any(|e| e.is_error()),
+            "unexpected errors: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn warns_on_unknown_param_for_square_bass() {
+        // square_bass は ADSR + pulse_width のみ。 detune_cents は saw_pad 用
+        let mut s = ok_song();
+        s.tracks[0].instrument = Instrument::new("square_bass");
+        s.tracks[0]
+            .instrument
+            .params
+            .insert("detune_cents".into(), serde_json::json!(10.0));
+        let errs = validate(&s);
+        assert!(
+            errs.iter().any(|e| e.code == "UNKNOWN_PARAM"
+                && e.is_warning()
+                && e.path.ends_with(".instrument.params.detune_cents")),
+            "expected UNKNOWN_PARAM warning for detune_cents, got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn known_params_do_not_warn() {
+        // square に pulse_width は OK
+        let mut s = ok_song();
+        s.tracks[0].instrument = Instrument::new("square");
+        s.tracks[0]
+            .instrument
+            .params
+            .insert("pulse_width".into(), serde_json::json!(0.3));
+        s.tracks[0]
+            .instrument
+            .params
+            .insert("attack".into(), serde_json::json!(0.02));
+        let errs = validate(&s);
+        assert!(
+            errs.is_empty(),
+            "expected no errors/warnings, got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn unknown_instrument_kind_skips_param_warning() {
+        // 楽器 type 自体が未知なら UNKNOWN_INSTRUMENT_TYPE のみ。 param までは追わない
+        let mut s = ok_song();
+        s.tracks[0].instrument = Instrument::new("nonexistent");
+        s.tracks[0]
+            .instrument
+            .params
+            .insert("foo".into(), serde_json::json!(1.0));
+        let errs = validate(&s);
+        assert!(errs.iter().any(|e| e.code == "UNKNOWN_INSTRUMENT_TYPE"));
+        assert!(
+            !errs.iter().any(|e| e.code == "UNKNOWN_PARAM"),
+            "should not warn on params when instrument type itself is unknown: {errs:?}"
+        );
     }
 }
