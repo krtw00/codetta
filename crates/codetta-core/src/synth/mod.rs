@@ -7,6 +7,7 @@
 //! 実装 [`manual`] で進める。
 
 pub mod manual;
+pub mod soundfont;
 
 /// 標準サンプルレート。 Phase 0 では 44.1kHz 固定 (05-sound.md)。
 pub const SAMPLE_RATE: u32 = 44100;
