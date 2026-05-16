@@ -949,8 +949,8 @@ fn instrument_catalog() -> Vec<Value> {
                     "kit": {
                         "type": "string",
                         "default": "default",
-                        "enum": ["default", "808", "909", "chip"],
-                        "note": "kit バリエーションは kick / snare のみ反映 (他の voice は default 固定)。 chip は 8bit 風 square sweep + 1bit noise",
+                        "enum": ["default", "808", "909"],
+                        "note": "kit バリエーションは kick / snare のみ反映 (他の voice は default 固定)",
                     },
                 },
                 "drum_keys": KNOWN_DRUM_KEYS,
