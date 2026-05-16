@@ -9,7 +9,10 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
-use codetta_core::{self as core, CodettaError, Effect, Instrument, Note, NoteOp, Song, Track};
+use codetta_core::{
+    self as core, CodettaError, Effect, Instrument, Note, NoteOp, Song, Track,
+    KNOWN_DRUM_KEYS, KNOWN_EFFECT_TYPES, KNOWN_INSTRUMENT_TYPES,
+};
 use serde_json::{json, Map, Value};
 
 #[derive(Parser)]
@@ -62,6 +65,12 @@ enum Command {
     SetFx(SetFxArgs),
     /// ノートに対する一括変形 (transpose / shift / scale / quantize 等)
     EditNotes(EditNotesArgs),
+    /// 利用可能な楽器一覧と各 type のパラメータスキーマを JSON 出力
+    ListInstruments,
+    /// 利用可能なエフェクト一覧と各 type のパラメータスキーマを JSON 出力
+    ListEffects,
+    /// プロジェクトファイル (.codetta) の JSON Schema を出力
+    Schema,
 }
 
 #[derive(Args)]
@@ -239,6 +248,9 @@ fn main() -> ExitCode {
         Command::SetInstrument(a) => cmd_set_instrument(a, &cli.common),
         Command::SetFx(a) => cmd_set_fx(a, &cli.common),
         Command::EditNotes(a) => cmd_edit_notes(a, &cli.common),
+        Command::ListInstruments => cmd_list_instruments(),
+        Command::ListEffects => cmd_list_effects(),
+        Command::Schema => cmd_schema(),
     };
     ExitCode::from(exit)
 }
@@ -641,6 +653,255 @@ fn cmd_edit_notes(args: EditNotesArgs, common: &CommonOpts) -> u8 {
     0
 }
 
+fn cmd_list_instruments() -> u8 {
+    emit_json(&json!({
+        "ok": true,
+        "instruments": instrument_catalog(),
+    }));
+    0
+}
+
+fn cmd_list_effects() -> u8 {
+    emit_json(&json!({
+        "ok": true,
+        "effects": effect_catalog(),
+    }));
+    0
+}
+
+fn cmd_schema() -> u8 {
+    emit_json(&json!({
+        "ok": true,
+        "schema_version": core::SCHEMA_VERSION,
+        "schema": song_json_schema(),
+    }));
+    0
+}
+
+/// 全 melodic / drum 楽器の説明 + 各 type のパラメータスキーマを構築する。
+///
+/// `KNOWN_INSTRUMENT_TYPES` に並ぶ全 type を一度走査して 1 エントリずつ返すので、
+/// 既知 type を追加したら必ずここにも description / params を足す
+/// (LLM / MCP がパラメータを引けないと話にならない)。
+fn instrument_catalog() -> Vec<Value> {
+    let adsr_params = json!({
+        "attack":  { "type": "float", "default": 0.01, "range": [0.0, 10.0], "unit": "sec" },
+        "decay":   { "type": "float", "default": 0.1,  "range": [0.0, 10.0], "unit": "sec" },
+        "sustain": { "type": "float", "default": 0.7,  "range": [0.0, 1.0] },
+        "release": { "type": "float", "default": 0.2,  "range": [0.0, 10.0], "unit": "sec" },
+    });
+
+    KNOWN_INSTRUMENT_TYPES
+        .iter()
+        .map(|&t| match t {
+            "sin" => json!({
+                "type": "sin",
+                "category": "melodic",
+                "description": "純音 (倍音なし)。 サブベース / パッド / FM 素材",
+                "params": adsr_params,
+            }),
+            "saw" | "saw_lead" => json!({
+                "type": t,
+                "category": "melodic",
+                "description": "PolyBLEP saw。 リード / ベース / パッド (倍音豊富)",
+                "params": adsr_params,
+            }),
+            "square" | "square_bass" => json!({
+                "type": t,
+                "category": "melodic",
+                "description": "PolyBLEP pulse。 デューティ比可変、 8bit / チップチューン",
+                "params": {
+                    "attack":  adsr_params["attack"],
+                    "decay":   adsr_params["decay"],
+                    "sustain": adsr_params["sustain"],
+                    "release": adsr_params["release"],
+                    "pulse_width": { "type": "float", "default": 0.5, "range": [0.05, 0.95] },
+                },
+            }),
+            "triangle" => json!({
+                "type": "triangle",
+                "category": "melodic",
+                "description": "三角波 (解析式)。 柔らかい音、 笛系",
+                "params": adsr_params,
+            }),
+            "saw_pad" => json!({
+                "type": "saw_pad",
+                "category": "melodic",
+                "description": "saw × 3 detune。 厚みあるパッド",
+                "params": {
+                    "attack":  adsr_params["attack"],
+                    "decay":   adsr_params["decay"],
+                    "sustain": adsr_params["sustain"],
+                    "release": adsr_params["release"],
+                    "detune_cents": { "type": "float", "default": 10.0, "range": [0.0, 50.0], "unit": "cent" },
+                },
+            }),
+            "drum_kit" => json!({
+                "type": "drum_kit",
+                "category": "drum",
+                "description": "GM Drum 互換キーの全合成ドラム。 pitch には drum key (例: \"kick\") を渡す",
+                "params": {
+                    "kit": {
+                        "type": "string",
+                        "default": "default",
+                        "enum": ["default", "808", "909"],
+                        "note": "kit バリエーションは kick / snare のみ反映 (他の voice は default 固定)",
+                    },
+                },
+                "drum_keys": KNOWN_DRUM_KEYS,
+            }),
+            _ => json!({
+                "type": t,
+                "category": "unknown",
+                "description": "(catalog entry missing — please update instrument_catalog)",
+                "params": {},
+            }),
+        })
+        .collect()
+}
+
+/// 全エフェクトの説明 + パラメータスキーマ。 `KNOWN_EFFECT_TYPES` に追加したらここも更新する。
+fn effect_catalog() -> Vec<Value> {
+    KNOWN_EFFECT_TYPES
+        .iter()
+        .map(|&t| match t {
+            "lowpass" => json!({
+                "type": "lowpass",
+                "description": "Chamberlin SVF lowpass",
+                "params": {
+                    "cutoff": { "type": "float", "default": 1000.0, "range": [20.0, 20000.0], "unit": "Hz" },
+                    "q":      { "type": "float", "default": 1.0,    "range": [0.5, 10.0] },
+                },
+            }),
+            "highpass" => json!({
+                "type": "highpass",
+                "description": "Chamberlin SVF highpass",
+                "params": {
+                    "cutoff": { "type": "float", "default": 1000.0, "range": [20.0, 20000.0], "unit": "Hz" },
+                    "q":      { "type": "float", "default": 1.0,    "range": [0.5, 10.0] },
+                },
+            }),
+            "distortion" => json!({
+                "type": "distortion",
+                "description": "tanh ソフトクリップ + tone (内蔵 lowpass)",
+                "params": {
+                    "amount": { "type": "float", "default": 0.3, "range": [0.0, 1.0] },
+                    "tone":   { "type": "float", "default": 0.5, "range": [0.0, 1.0] },
+                },
+            }),
+            "delay" => json!({
+                "type": "delay",
+                "description": "循環バッファ delay (BPM 同期 / 秒指定)",
+                "params": {
+                    "time":     { "type": ["string", "float"], "default": "1/8",
+                                  "note": "BPM 同期は \"1/4\" / \"1/8\" 等、 秒指定は数値 (0.001-2.0)" },
+                    "feedback": { "type": "float", "default": 0.3,  "range": [0.0, 0.95] },
+                    "mix":      { "type": "float", "default": 0.25, "range": [0.0, 1.0] },
+                },
+            }),
+            "reverb" => json!({
+                "type": "reverb",
+                "description": "Schroeder reverb (4 comb + 2 allpass、 L/R で delay 長を分けた擬似ステレオ)",
+                "params": {
+                    "size": { "type": "float", "default": 0.5, "range": [0.0, 1.0] },
+                    "damp": { "type": "float", "default": 0.5, "range": [0.0, 1.0] },
+                    "mix":  { "type": "float", "default": 0.2, "range": [0.0, 1.0] },
+                },
+            }),
+            _ => json!({
+                "type": t,
+                "description": "(catalog entry missing — please update effect_catalog)",
+                "params": {},
+            }),
+        })
+        .collect()
+}
+
+/// プロジェクトファイル (Song) の JSON Schema (draft-2020-12)。
+///
+/// LLM / MCP / IDE 補完で利用するための機械可読仕様。 schema の精度は
+/// 「ある程度の指針」 程度で十分 (詳細な params 検証は `validate` 側で実施)。
+fn song_json_schema() -> Value {
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://codetta.dev/schemas/song-0.1.json",
+        "title": "Codetta Song",
+        "type": "object",
+        "required": ["version", "metadata"],
+        "properties": {
+            "version":  { "type": "string", "enum": core::SUPPORTED_VERSIONS },
+            "metadata": { "$ref": "#/$defs/Metadata" },
+            "tracks":   { "type": "array", "items": { "$ref": "#/$defs/Track" } },
+        },
+        "$defs": {
+            "Metadata": {
+                "type": "object",
+                "required": ["name", "bpm"],
+                "properties": {
+                    "name":           { "type": "string" },
+                    "bpm":            { "type": "integer", "minimum": 20, "maximum": 300 },
+                    "key":            { "type": "string", "description": "例: \"Am\", \"C\", \"F#m\"" },
+                    "time_signature": {
+                        "type": "array",
+                        "items": { "type": "integer", "minimum": 1 },
+                        "minItems": 2,
+                        "maxItems": 2,
+                    },
+                    "created_at": { "type": "string" },
+                    "tags":       { "type": "array", "items": { "type": "string" } },
+                },
+            },
+            "Track": {
+                "type": "object",
+                "required": ["id", "name", "instrument"],
+                "properties": {
+                    "id":         { "type": "string", "minLength": 1 },
+                    "name":       { "type": "string" },
+                    "instrument": { "$ref": "#/$defs/Instrument" },
+                    "volume":     { "type": "number", "minimum": 0.0, "maximum": 1.0 },
+                    "pan":        { "type": "number", "minimum": -1.0, "maximum": 1.0 },
+                    "mute":       { "type": "boolean" },
+                    "solo":       { "type": "boolean" },
+                    "fx":         { "type": "array", "items": { "$ref": "#/$defs/Effect" } },
+                    "notes":      { "type": "array", "items": { "$ref": "#/$defs/Note" } },
+                },
+            },
+            "Instrument": {
+                "type": "object",
+                "required": ["type"],
+                "properties": {
+                    "type":   { "type": "string", "enum": KNOWN_INSTRUMENT_TYPES },
+                    "params": { "type": "object", "additionalProperties": true },
+                },
+            },
+            "Effect": {
+                "type": "object",
+                "required": ["type"],
+                "properties": {
+                    "type": { "type": "string", "enum": KNOWN_EFFECT_TYPES },
+                },
+                "additionalProperties": true,
+            },
+            "Note": {
+                "type": "object",
+                "required": ["t", "pitch", "dur"],
+                "properties": {
+                    "t":     { "type": "number", "minimum": 0.0 },
+                    "pitch": { "$ref": "#/$defs/Pitch" },
+                    "dur":   { "type": "number", "exclusiveMinimum": 0.0 },
+                    "vel":   { "type": "integer", "minimum": 0, "maximum": 127 },
+                },
+            },
+            "Pitch": {
+                "oneOf": [
+                    { "type": "integer", "minimum": 0, "maximum": 127, "description": "MIDI ノート番号" },
+                    { "type": "string", "description": "ノート名 (例: \"C4\", \"Bb3\") または drum key (例: \"kick\")" },
+                ],
+            },
+        },
+    })
+}
+
 fn load_ops(json_str: Option<&str>, file: Option<&Path>) -> Result<Vec<NoteOp>, u8> {
     let raw: String = match (json_str, file) {
         (Some(s), _) => s.to_string(),
@@ -772,4 +1033,108 @@ fn emit_error(e: &CodettaError) -> u8 {
         "errors": [{ "code": code, "message": msg }]
     }));
     exit
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn instrument_catalog_covers_all_known_types() {
+        let catalog = instrument_catalog();
+        let listed: std::collections::HashSet<&str> = catalog
+            .iter()
+            .map(|e| e["type"].as_str().expect("type field"))
+            .collect();
+        for t in KNOWN_INSTRUMENT_TYPES {
+            assert!(listed.contains(t), "missing catalog entry for {t}");
+            // 「catalog entry missing」 プレースホルダが残っていない
+            let entry = catalog
+                .iter()
+                .find(|e| e["type"].as_str() == Some(t))
+                .unwrap();
+            let desc = entry["description"].as_str().unwrap_or("");
+            assert!(
+                !desc.contains("catalog entry missing"),
+                "placeholder description for {t}: {desc}"
+            );
+            assert_eq!(catalog.iter().filter(|e| e["type"].as_str() == Some(t)).count(), 1, "duplicate entry for {t}");
+        }
+        assert_eq!(catalog.len(), KNOWN_INSTRUMENT_TYPES.len());
+    }
+
+    #[test]
+    fn effect_catalog_covers_all_known_types() {
+        let catalog = effect_catalog();
+        let listed: std::collections::HashSet<&str> = catalog
+            .iter()
+            .map(|e| e["type"].as_str().expect("type field"))
+            .collect();
+        for t in KNOWN_EFFECT_TYPES {
+            assert!(listed.contains(t), "missing catalog entry for {t}");
+            let entry = catalog
+                .iter()
+                .find(|e| e["type"].as_str() == Some(t))
+                .unwrap();
+            let desc = entry["description"].as_str().unwrap_or("");
+            assert!(
+                !desc.contains("catalog entry missing"),
+                "placeholder description for {t}: {desc}"
+            );
+        }
+        assert_eq!(catalog.len(), KNOWN_EFFECT_TYPES.len());
+    }
+
+    #[test]
+    fn drum_kit_entry_lists_all_drum_keys() {
+        let catalog = instrument_catalog();
+        let drum = catalog
+            .iter()
+            .find(|e| e["type"].as_str() == Some("drum_kit"))
+            .expect("drum_kit catalog entry");
+        let keys: Vec<&str> = drum["drum_keys"]
+            .as_array()
+            .expect("drum_keys array")
+            .iter()
+            .map(|v| v.as_str().expect("drum key string"))
+            .collect();
+        for k in KNOWN_DRUM_KEYS {
+            assert!(keys.contains(k), "drum_kit catalog missing key {k}");
+        }
+    }
+
+    #[test]
+    fn schema_has_expected_top_level_defs() {
+        let schema = song_json_schema();
+        let defs = schema["$defs"]
+            .as_object()
+            .expect("schema $defs");
+        for required in [
+            "Metadata", "Track", "Instrument", "Effect", "Note", "Pitch",
+        ] {
+            assert!(defs.contains_key(required), "schema missing $defs.{required}");
+        }
+        // top level
+        assert_eq!(schema["type"].as_str(), Some("object"));
+        let required: Vec<&str> = schema["required"]
+            .as_array()
+            .expect("required")
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert!(required.contains(&"version"));
+        assert!(required.contains(&"metadata"));
+    }
+
+    #[test]
+    fn schema_instrument_enum_matches_known_types() {
+        let schema = song_json_schema();
+        let inst_enum = schema["$defs"]["Instrument"]["properties"]["type"]["enum"]
+            .as_array()
+            .expect("instrument type enum");
+        let listed: Vec<&str> = inst_enum.iter().filter_map(|v| v.as_str()).collect();
+        for t in KNOWN_INSTRUMENT_TYPES {
+            assert!(listed.contains(t), "schema instrument enum missing {t}");
+        }
+    }
 }
