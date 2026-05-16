@@ -17,8 +17,8 @@ serde_json = "1"
 thiserror = "1"
 hound = "3"
 midly = "0.5"
-# DSP: fundsp 採用可否は Phase 0 実装で判断 (docs/design/05-sound.md 参照)
-# fundsp = "0.20"
+# DSP: fundsp は採用判断の結果不採用 (docs/design/05-sound.md 参照)。
+# 自前ループ実装 (crates/codetta-core/src/synth/manual.rs) で進める。
 
 [dev-dependencies]
 insta = { version = "1", features = ["json"] }
