@@ -1031,6 +1031,12 @@ fn song_json_schema() -> Value {
                         "minItems": 2,
                         "maxItems": 2,
                     },
+                    "master_gain": {
+                        "type": "number",
+                        "minimum": 0.0,
+                        "maximum": 4.0,
+                        "description": "全 track ミックス後 (soft_clip 前) に乗算する gain。 default 1.0",
+                    },
                     "created_at": { "type": "string" },
                     "tags":       { "type": "array", "items": { "type": "string" } },
                 },

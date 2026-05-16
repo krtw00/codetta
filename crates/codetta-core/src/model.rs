@@ -18,6 +18,7 @@ impl Song {
                 bpm,
                 key,
                 time_signature: default_time_signature(),
+                master_gain: default_master_gain(),
                 created_at: None,
                 tags: Vec::new(),
             },
@@ -51,6 +52,8 @@ pub struct Metadata {
     pub key: Option<String>,
     #[serde(default = "default_time_signature")]
     pub time_signature: [u32; 2],
+    #[serde(default = "default_master_gain")]
+    pub master_gain: f32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -59,6 +62,10 @@ pub struct Metadata {
 
 fn default_time_signature() -> [u32; 2] {
     [4, 4]
+}
+
+fn default_master_gain() -> f32 {
+    1.0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

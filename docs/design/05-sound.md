@@ -52,7 +52,8 @@ flowchart LR
     T1[track 1] --> Bus["master bus<br/>(simple sum)"]
     T2[track 2] --> Bus
     Tn[track N] --> Bus
-    Bus --> Lim["soft limiter<br/>(clipping 防止)"]
+    Bus --> Mg["× metadata.master_gain<br/>(default 1.0、 範囲 0..4)"]
+    Mg --> Lim["soft limiter<br/>(clipping 防止)"]
     Lim --> Wav["WAV 出力<br/>(44.1kHz / 16bit)"]
 ```
 
