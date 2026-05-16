@@ -1338,6 +1338,30 @@ mod tests {
     }
 
     #[test]
+    fn catalog_params_match_effect_param_keys() {
+        // catalog の params キー集合 と validate 側 effect_param_keys が一致することを保証。
+        // どちらかを更新したらもう一方も更新する必要があり、 これが落ちたら同期漏れ。
+        use codetta_core::validate::effect_param_keys;
+        use std::collections::HashSet;
+
+        let catalog = effect_catalog();
+        for entry in &catalog {
+            let kind = entry["type"].as_str().expect("type field");
+            let params = entry["params"].as_object().expect("params field");
+            let catalog_keys: HashSet<&str> = params.keys().map(String::as_str).collect();
+            let known: HashSet<&str> = effect_param_keys(kind)
+                .unwrap_or_else(|| panic!("effect_param_keys missing entry for {kind:?}"))
+                .iter()
+                .copied()
+                .collect();
+            assert_eq!(
+                catalog_keys, known,
+                "params mismatch for {kind:?}: catalog={catalog_keys:?} vs validate={known:?}"
+            );
+        }
+    }
+
+    #[test]
     fn drum_kit_entry_lists_all_drum_keys() {
         let catalog = instrument_catalog();
         let drum = catalog
