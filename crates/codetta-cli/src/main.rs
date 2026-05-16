@@ -2,15 +2,15 @@
 //!
 //! 設計: docs/design/03-cli.md
 //!
-//! Phase 0 first cut の現スコープ: `new` / `info` / `validate` / `render`。
-//! 残コマンド (`add-track` / `set-notes` / `schema` 他) は続く実装で追加する。
+//! Phase 0 現スコープ: `new` / `info` / `validate` / `render` + track/notes 編集系。
+//! 残コマンド (`set-instrument` / `set-fx` / `edit-notes` / `schema` 他) は続く実装で追加する。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
-use codetta_core::{self as core, CodettaError};
-use serde_json::{json, Value};
+use codetta_core::{self as core, CodettaError, Instrument, Note, Song, Track};
+use serde_json::{json, Map, Value};
 
 #[derive(Parser)]
 #[command(
@@ -46,6 +46,16 @@ enum Command {
     Validate(ValidateArgs),
     /// WAV ファイルにレンダリング
     Render(RenderArgs),
+    /// トラックを追加
+    AddTrack(AddTrackArgs),
+    /// トラックを削除
+    RemoveTrack(RemoveTrackArgs),
+    /// トラックのノート列を全置換
+    SetNotes(SetNotesArgs),
+    /// トラックにノートを追加
+    AddNotes(AddNotesArgs),
+    /// トラックのノートを全削除
+    ClearNotes(ClearNotesArgs),
 }
 
 #[derive(Args)]
@@ -89,6 +99,70 @@ struct ValidateArgs {
 }
 
 #[derive(Args)]
+struct AddTrackArgs {
+    /// プロジェクトファイル
+    path: PathBuf,
+    /// トラック ID (kebab-case 推奨、 必須)
+    #[arg(long)]
+    id: String,
+    /// 表示名 (省略時は id と同じ)
+    #[arg(long)]
+    name: Option<String>,
+    /// 楽器 type (デフォルト `sin`)
+    #[arg(long, default_value = "sin")]
+    instrument: String,
+    /// 音量 0.0-1.0
+    #[arg(long, default_value_t = 0.8)]
+    volume: f32,
+    /// パン -1.0 (L) 〜 1.0 (R)
+    #[arg(long, default_value_t = 0.0)]
+    pan: f32,
+    /// 楽器 params の JSON オブジェクト (例: `'{"attack":0.02}'`)
+    #[arg(long = "params-json")]
+    params_json: Option<String>,
+}
+
+#[derive(Args)]
+struct RemoveTrackArgs {
+    path: PathBuf,
+    /// 削除対象トラック ID
+    #[arg(long)]
+    id: String,
+}
+
+#[derive(Args)]
+struct SetNotesArgs {
+    path: PathBuf,
+    /// 対象トラック ID
+    #[arg(long)]
+    track: String,
+    /// ノート列を JSON 文字列で渡す (排他: `--notes-file`)
+    #[arg(long = "notes-json", conflicts_with = "notes_file")]
+    notes_json: Option<String>,
+    /// ノート列を JSON ファイルで渡す
+    #[arg(long = "notes-file", conflicts_with = "notes_json")]
+    notes_file: Option<PathBuf>,
+}
+
+#[derive(Args)]
+struct AddNotesArgs {
+    path: PathBuf,
+    #[arg(long)]
+    track: String,
+    #[arg(long = "notes-json", conflicts_with = "notes_file")]
+    notes_json: Option<String>,
+    #[arg(long = "notes-file", conflicts_with = "notes_json")]
+    notes_file: Option<PathBuf>,
+}
+
+#[derive(Args)]
+struct ClearNotesArgs {
+    path: PathBuf,
+    #[arg(long)]
+    track: String,
+}
+
+#[derive(Args)]
 struct RenderArgs {
     /// 入力 `.codetta` ファイル
     path: PathBuf,
@@ -110,6 +184,11 @@ fn main() -> ExitCode {
         Command::Info(a) => cmd_info(a, &cli.common),
         Command::Validate(a) => cmd_validate(a, &cli.common),
         Command::Render(a) => cmd_render(a, &cli.common),
+        Command::AddTrack(a) => cmd_add_track(a, &cli.common),
+        Command::RemoveTrack(a) => cmd_remove_track(a, &cli.common),
+        Command::SetNotes(a) => cmd_set_notes(a, &cli.common),
+        Command::AddNotes(a) => cmd_add_notes(a, &cli.common),
+        Command::ClearNotes(a) => cmd_clear_notes(a, &cli.common),
     };
     ExitCode::from(exit)
 }
@@ -271,6 +350,185 @@ fn cmd_render(args: RenderArgs, common: &CommonOpts) -> u8 {
     0
 }
 
+fn cmd_add_track(args: AddTrackArgs, common: &CommonOpts) -> u8 {
+    let mut song = match core::load(&args.path) {
+        Ok(s) => s,
+        Err(e) => return emit_error(&e),
+    };
+
+    let params = match args.params_json.as_deref() {
+        None => Map::new(),
+        Some(s) => match serde_json::from_str::<Value>(s) {
+            Ok(Value::Object(m)) => m,
+            Ok(_) => {
+                emit_json(&json!({
+                    "ok": false,
+                    "errors": [{ "code": "INVALID_JSON", "message": "--params-json must be a JSON object" }]
+                }));
+                return 1;
+            }
+            Err(e) => return emit_error(&CodettaError::InvalidJson(e)),
+        },
+    };
+
+    let track = Track {
+        id: args.id.clone(),
+        name: args.name.unwrap_or_else(|| args.id.clone()),
+        instrument: Instrument {
+            kind: args.instrument,
+            params,
+        },
+        volume: args.volume,
+        pan: args.pan,
+        mute: false,
+        solo: false,
+        fx: vec![],
+        notes: vec![],
+    };
+
+    if let Err(e) = core::add_track(&mut song, track) {
+        return emit_error(&e);
+    }
+    if let Some(code) = save_after_validate(&song, &args.path, common) {
+        return code;
+    }
+
+    if !common.quiet {
+        eprintln!("[OK] Added track '{}'", args.id);
+    }
+    emit_json(&json!({ "ok": true, "track_id": args.id }));
+    0
+}
+
+fn cmd_remove_track(args: RemoveTrackArgs, common: &CommonOpts) -> u8 {
+    let mut song = match core::load(&args.path) {
+        Ok(s) => s,
+        Err(e) => return emit_error(&e),
+    };
+    if let Err(e) = core::remove_track(&mut song, &args.id) {
+        return emit_error(&e);
+    }
+    if let Some(code) = save_after_validate(&song, &args.path, common) {
+        return code;
+    }
+    if !common.quiet {
+        eprintln!("[OK] Removed track '{}'", args.id);
+    }
+    emit_json(&json!({ "ok": true, "track_id": args.id }));
+    0
+}
+
+fn cmd_set_notes(args: SetNotesArgs, common: &CommonOpts) -> u8 {
+    let mut song = match core::load(&args.path) {
+        Ok(s) => s,
+        Err(e) => return emit_error(&e),
+    };
+    let notes = match load_notes(args.notes_json.as_deref(), args.notes_file.as_deref()) {
+        Ok(n) => n,
+        Err(code) => return code,
+    };
+    let count = match core::set_notes(&mut song, &args.track, notes) {
+        Ok(n) => n,
+        Err(e) => return emit_error(&e),
+    };
+    if let Some(code) = save_after_validate(&song, &args.path, common) {
+        return code;
+    }
+    if !common.quiet {
+        eprintln!("[OK] Set {count} note(s) on track '{}'", args.track);
+    }
+    emit_json(&json!({ "ok": true, "track_id": args.track, "note_count": count }));
+    0
+}
+
+fn cmd_add_notes(args: AddNotesArgs, common: &CommonOpts) -> u8 {
+    let mut song = match core::load(&args.path) {
+        Ok(s) => s,
+        Err(e) => return emit_error(&e),
+    };
+    let notes = match load_notes(args.notes_json.as_deref(), args.notes_file.as_deref()) {
+        Ok(n) => n,
+        Err(code) => return code,
+    };
+    let (added, skipped, total) = match core::add_notes(&mut song, &args.track, notes) {
+        Ok(t) => t,
+        Err(e) => return emit_error(&e),
+    };
+    if let Some(code) = save_after_validate(&song, &args.path, common) {
+        return code;
+    }
+    if !common.quiet {
+        eprintln!(
+            "[OK] Added {added} note(s) to '{}' (skipped {skipped} dup, total {total})",
+            args.track
+        );
+    }
+    emit_json(&json!({
+        "ok": true,
+        "track_id": args.track,
+        "added": added,
+        "skipped_duplicates": skipped,
+        "total_notes": total,
+    }));
+    0
+}
+
+fn cmd_clear_notes(args: ClearNotesArgs, common: &CommonOpts) -> u8 {
+    let mut song = match core::load(&args.path) {
+        Ok(s) => s,
+        Err(e) => return emit_error(&e),
+    };
+    let removed = match core::clear_notes(&mut song, &args.track) {
+        Ok(n) => n,
+        Err(e) => return emit_error(&e),
+    };
+    if let Some(code) = save_after_validate(&song, &args.path, common) {
+        return code;
+    }
+    if !common.quiet {
+        eprintln!("[OK] Cleared {removed} note(s) from '{}'", args.track);
+    }
+    emit_json(&json!({ "ok": true, "track_id": args.track, "removed": removed }));
+    0
+}
+
+/// `--notes-json` / `--notes-file` のいずれかから `Vec<Note>` を取り出す。
+/// 両方未指定なら空配列 (= 「ノートをクリア」 と同等)。
+fn load_notes(json_str: Option<&str>, file: Option<&Path>) -> Result<Vec<Note>, u8> {
+    let raw: String = match (json_str, file) {
+        (Some(s), _) => s.to_string(),
+        (None, Some(p)) => match std::fs::read_to_string(p) {
+            Ok(s) => s,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(emit_error(&CodettaError::FileNotFound(p.to_path_buf())));
+            }
+            Err(e) => return Err(emit_error(&CodettaError::Io(e))),
+        },
+        (None, None) => "[]".to_string(),
+    };
+    match serde_json::from_str::<Vec<Note>>(&raw) {
+        Ok(n) => Ok(n),
+        Err(e) => Err(emit_error(&CodettaError::InvalidJson(e))),
+    }
+}
+
+/// 編集後の Song を validate し、 OK なら force 上書き保存する。
+/// 失敗時の exit code を `Some(code)` で返し、 成功時は `None`。
+fn save_after_validate(song: &Song, path: &Path, common: &CommonOpts) -> Option<u8> {
+    let verrs = core::validate(song);
+    if !verrs.is_empty() {
+        if !common.quiet {
+            eprintln!("[ERROR] {} validation error(s) after edit", verrs.len());
+        }
+        emit_json(&json!({ "ok": false, "errors": verrs }));
+        return Some(1);
+    }
+    if let Err(e) = core::save(song, path, true) {
+        return Some(emit_error(&e));
+    }
+    None
+}
+
 /// stdout に 1 行 JSON で書き出す (改行付き)。
 fn emit_json(v: &Value) {
     use std::io::Write;
@@ -298,6 +556,16 @@ fn emit_error(e: &CodettaError) -> u8 {
             "UNKNOWN_VERSION",
             1,
             format!("unsupported schema version: {v:?}"),
+        ),
+        CodettaError::TrackNotFound(id) => (
+            "TRACK_NOT_FOUND",
+            1,
+            format!("track not found: {id:?}"),
+        ),
+        CodettaError::TrackIdDuplicate(id) => (
+            "TRACK_ID_DUPLICATE",
+            1,
+            format!("duplicate track id: {id:?}"),
         ),
         CodettaError::Validation(errs) => {
             emit_json(&json!({ "ok": false, "errors": errs }));
