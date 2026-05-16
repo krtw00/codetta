@@ -74,6 +74,38 @@ codetta render sf2-demo.codetta --output sf2-demo.wav
 
 `params.preset` は GM Program 番号 (0 = Acoustic Grand Piano)、`params.bank` は省略時 0。SF2 ファイルが見つからない場合は `validate` が `SOUNDFONT_FILE_NOT_FOUND` を報告します。
 
+### 4. SF2 内の preset を探す
+
+SF2 が持っている preset (program) 番号 / bank / 名前を確認する方法は 2 通り:
+
+**(a) MCP resource として参照** — LLM (Claude Desktop など) から context に直接読み込みたい場合は、ファイル名で `codetta://soundfonts/{name}` resource を要求します。`$CODETTA_SOUNDFONT_DIR` 配下を解決対象に。
+
+```
+# 例: Claude Desktop から
+@codetta://soundfonts/GeneralUser-GS-v1.471.sf2
+```
+
+**(b) CLI で詳細列挙** — ターミナルで全 preset を眺めたい / `jq` でフィルタしたい場合は `list-soundfont-presets` を使います。出力は JSON 1 本。
+
+```bash
+codetta list-soundfont-presets GeneralUser-GS-v1.471.sf2 | jq '.presets[] | select(.bank == 0 and .preset < 8)'
+# => Stereo Grand / Bright Grand / Electric Grand / ... (Piano family)
+```
+
+出力 schema (抜粋):
+
+```json
+{
+  "file": "/Users/.../GeneralUser-GS-v1.471.sf2",
+  "ok": true,
+  "preset_count": 269,
+  "soundfont": { "bank_name": "...", "author": "...", "version": "2.1", ... },
+  "presets": [{ "bank": 0, "preset": 0, "name": "Stereo Grand" }, ...]
+}
+```
+
+`add-track` の `params.preset` / `params.bank` に渡す番号はここで確認した値を使います。
+
 詳しい仕様 / render path / 制約は **[docs/design/07-soundfont.md](docs/design/07-soundfont.md)** を参照。
 
 ## 設計ドキュメント
