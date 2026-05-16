@@ -22,6 +22,12 @@ pub enum CodettaError {
 
     #[error("validation failed ({} error(s))", .0.len())]
     Validation(Vec<ValidationError>),
+
+    #[error("WAV error: {0}")]
+    Wav(#[from] hound::Error),
+
+    #[error("render failed: {0}")]
+    Render(String),
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]

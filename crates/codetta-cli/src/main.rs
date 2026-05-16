@@ -2,8 +2,8 @@
 //!
 //! 設計: docs/design/03-cli.md
 //!
-//! Phase 0 の現スコープ: `new` / `info` / `validate`。
-//! `add-track` / `set-notes` / `render` は続く実装で追加する。
+//! Phase 0 first cut の現スコープ: `new` / `info` / `validate` / `render`。
+//! 残コマンド (`add-track` / `set-notes` / `schema` 他) は続く実装で追加する。
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -44,6 +44,8 @@ enum Command {
     Info(InfoArgs),
     /// スキーマ + 整合性検証
     Validate(ValidateArgs),
+    /// WAV ファイルにレンダリング
+    Render(RenderArgs),
 }
 
 #[derive(Args)]
@@ -86,12 +88,28 @@ struct ValidateArgs {
     path: PathBuf,
 }
 
+#[derive(Args)]
+struct RenderArgs {
+    /// 入力 `.codetta` ファイル
+    path: PathBuf,
+    /// 出力 WAV ファイルパス
+    #[arg(short, long)]
+    output: PathBuf,
+    /// サンプルレート (Phase 0 first cut は 44100 のみ)
+    #[arg(long, default_value_t = 44100)]
+    sample_rate: u32,
+    /// ビット深度 (Phase 0 first cut は 16 のみ)
+    #[arg(long, default_value_t = 16)]
+    bit_depth: u16,
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let exit = match cli.command {
         Command::New(a) => cmd_new(a, &cli.common),
         Command::Info(a) => cmd_info(a, &cli.common),
         Command::Validate(a) => cmd_validate(a, &cli.common),
+        Command::Render(a) => cmd_render(a, &cli.common),
     };
     ExitCode::from(exit)
 }
@@ -180,6 +198,79 @@ fn cmd_validate(args: ValidateArgs, common: &CommonOpts) -> u8 {
     }
 }
 
+fn cmd_render(args: RenderArgs, common: &CommonOpts) -> u8 {
+    // Phase 0 first cut の制約: sample_rate / bit_depth は固定値のみ
+    if args.sample_rate != 44100 {
+        emit_json(&json!({
+            "ok": false,
+            "errors": [{
+                "code": "RENDER_FAILED",
+                "message": format!("sample_rate {} not supported (Phase 0 first cut: 44100 only)", args.sample_rate),
+            }]
+        }));
+        return 1;
+    }
+    if args.bit_depth != 16 {
+        emit_json(&json!({
+            "ok": false,
+            "errors": [{
+                "code": "RENDER_FAILED",
+                "message": format!("bit_depth {} not supported (Phase 0 first cut: 16 only)", args.bit_depth),
+            }]
+        }));
+        return 1;
+    }
+
+    let song = match core::load(&args.path) {
+        Ok(s) => s,
+        Err(e) => return emit_error(&e),
+    };
+    let verrs = core::validate(&song);
+    if !verrs.is_empty() {
+        if !common.quiet {
+            eprintln!("[ERROR] {} validation error(s)", verrs.len());
+        }
+        emit_json(&json!({ "ok": false, "errors": verrs }));
+        return 1;
+    }
+
+    if !common.quiet {
+        eprintln!("[INFO] Rendering {} → {}", args.path.display(), args.output.display());
+    }
+
+    let t0 = std::time::Instant::now();
+    let stats = match core::render_to_wav(&song, &args.output) {
+        Ok(s) => s,
+        Err(e) => return emit_error(&e),
+    };
+    let elapsed = t0.elapsed().as_secs_f32();
+    let rtfactor = if elapsed > 0.0 { stats.duration_sec / elapsed } else { 0.0 };
+
+    if !common.quiet {
+        eprintln!(
+            "[OK] Wrote {} ({:.2}s @ {}Hz, {}bit) in {:.2}s [{:.1}x realtime]",
+            args.output.display(),
+            stats.duration_sec,
+            stats.sample_rate,
+            stats.bit_depth,
+            elapsed,
+            rtfactor,
+        );
+    }
+
+    let abs = std::fs::canonicalize(&args.output).unwrap_or_else(|_| args.output.clone());
+    emit_json(&json!({
+        "ok": true,
+        "output": abs.to_string_lossy(),
+        "duration_sec": stats.duration_sec,
+        "sample_rate": stats.sample_rate,
+        "bit_depth": stats.bit_depth,
+        "render_time_sec": elapsed,
+        "rtfactor": rtfactor,
+    }));
+    0
+}
+
 /// stdout に 1 行 JSON で書き出す (改行付き)。
 fn emit_json(v: &Value) {
     use std::io::Write;
@@ -212,6 +303,8 @@ fn emit_error(e: &CodettaError) -> u8 {
             emit_json(&json!({ "ok": false, "errors": errs }));
             return 1;
         }
+        CodettaError::Wav(we) => ("RENDER_FAILED", 1, format!("WAV write failed: {we}")),
+        CodettaError::Render(m) => ("RENDER_FAILED", 1, m.clone()),
     };
     emit_json(&json!({
         "ok": false,

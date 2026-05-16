@@ -3,17 +3,20 @@
 //! 音楽プロジェクトのモデル、 DSP / シンセ、 WAV レンダリング、 MIDI I/O を提供する。
 //! 副作用 (再生 / ネットワーク / UI) は持たず、 ファイル I/O のみ。
 //!
-//! Phase 0 の現スコープ: モデル + JSON I/O + バリデーション。
-//! 合成 / レンダリングは続くコミットで追加する。
+//! Phase 0 first cut の現スコープ: モデル + JSON I/O + バリデーション + `sin`
+//! オシレータでの WAV レンダリング。 他のオシレータ / フィルタ / ドラム / MIDI I/O は続く実装で。
 
 pub mod error;
 pub mod io;
 pub mod model;
+pub mod render;
+pub mod synth;
 pub mod validate;
 
 pub use error::{CodettaError, ValidationError};
 pub use io::{load, save};
 pub use model::{Effect, Instrument, Metadata, Note, Pitch, Song, Track};
+pub use render::{render_to_buffer, render_to_wav, RenderStats};
 pub use validate::{validate, KNOWN_DRUM_KEYS, KNOWN_EFFECT_TYPES, KNOWN_INSTRUMENT_TYPES};
 
 /// 現バージョンで書き出すスキーマバージョン。
