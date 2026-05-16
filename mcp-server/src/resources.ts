@@ -30,9 +30,12 @@ import { getWorkspace } from "./workspace.js";
 function getPresetsDir(): string {
   const env = process.env.CODETTA_PRESETS_DIR;
   if (env && env.length > 0) return resolve(env);
-  // dist/resources.js -> dist/ -> mcp-server/ -> <repo root>/ -> docs/examples
+  // build step で <repo>/docs/examples を dist/presets にコピーする
+  // (mcp-server/package.json の "build" script を参照)。
+  // これにより dev (mcp-server/dist/presets/) でも deploy 先
+  // (~/.mcp-servers/codetta/dist/presets/) でも同じ参照で動く。
   const here = dirname(fileURLToPath(import.meta.url));
-  return resolve(here, "..", "..", "docs", "examples");
+  return resolve(here, "presets");
 }
 
 async function listPresets(): Promise<{ name: string; path: string }[]> {
