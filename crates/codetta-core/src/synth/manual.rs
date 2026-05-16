@@ -1,7 +1,7 @@
 //! 自前ループ実装の 1 voice (オシレータ + ADSR)。
 //!
 //! `fundsp` を使わずに済むかを判断するための「自前版」プロトタイプ。
-//! 現状は `sin` と `saw` (PolyBLEP) を実装済み。 残り square / triangle / saw_pad は順次追加。
+//! 現状は `sin` / `saw` / `square` (すべて PolyBLEP) を実装済み。 残り triangle / saw_pad は順次追加。
 //!
 //! Envelope 曲線は線形セグメント。 sound.md は「指数」を最終形と書いているが、
 //! Phase 0 first cut は線形で十分音になる (差し替えは Phase 1+)。
@@ -75,6 +75,39 @@ pub fn render_voice_saw(freq_hz: f32, hold_sec: f32, adsr: AdsrParams) -> Vec<f3
     for &e in &env {
         let naive = 2.0 * phase - 1.0;
         let y = naive - polyblep(phase, dt);
+        out.push(y * e);
+        phase += dt;
+        if phase >= 1.0 {
+            phase -= 1.0;
+        }
+    }
+    out
+}
+
+/// 1 ノート分の PolyBLEP square / pulse + ADSR を生成し、 mono バッファとして返す。
+///
+/// `pulse_width` (0.05-0.95 にクランプ) で duty を制御。 0.5 で対称矩形、 それ以外で PWM。
+/// 立ち上がり (phase=0、 -1→+1) と立ち下がり (phase=pulse_width、 +1→-1) の 2 箇所に
+/// PolyBLEP 補正を適用する。
+pub fn render_voice_square(
+    freq_hz: f32,
+    hold_sec: f32,
+    adsr: AdsrParams,
+    pulse_width: f32,
+) -> Vec<f32> {
+    let sr = SAMPLE_RATE as f32;
+    let dt = freq_hz / sr;
+    let pw = pulse_width.clamp(0.05, 0.95);
+    let env = build_envelope(hold_sec, adsr);
+    let mut phase = 0.0_f32; // 0..1
+    let mut out = Vec::with_capacity(env.len());
+
+    for &e in &env {
+        let naive = if phase < pw { 1.0 } else { -1.0 };
+        // 立ち上がり @ phase=0 (上向きステップ) → polyblep を加算
+        // 立ち下がり @ phase=pw (下向きステップ) → 位相を pw だけずらして polyblep を減算
+        let phase_at_fall = if phase >= pw { phase - pw } else { phase + 1.0 - pw };
+        let y = naive + polyblep(phase, dt) - polyblep(phase_at_fall, dt);
         out.push(y * e);
         phase += dt;
         if phase >= 1.0 {
@@ -177,5 +210,68 @@ mod tests {
         let span = v.iter().cloned().fold(0.0_f32, f32::max)
             - v.iter().cloned().fold(0.0_f32, f32::min);
         assert!(span > 1.5, "saw peak-to-peak too small: {span}");
+    }
+
+    #[test]
+    fn square_voice_length_matches_hold_plus_release() {
+        let adsr = AdsrParams {
+            attack: 0.0,
+            decay: 0.0,
+            sustain: 1.0,
+            release: 0.1,
+        };
+        let v = render_voice_square(440.0, 0.5, adsr, 0.5);
+        let expected = (0.5 * SAMPLE_RATE as f32) as usize + (0.1 * SAMPLE_RATE as f32) as usize;
+        assert_eq!(v.len(), expected);
+    }
+
+    #[test]
+    fn square_voice_ends_near_zero() {
+        let v = render_voice_square(440.0, 0.05, AdsrParams::default(), 0.5);
+        let last = *v.last().unwrap();
+        assert!(last.abs() < 0.05, "release tail should be near zero, got {last}");
+    }
+
+    #[test]
+    fn square_voice_amplitude_within_unit() {
+        let v = render_voice_square(440.0, 0.1, AdsrParams::default(), 0.5);
+        let max = v.iter().cloned().fold(0.0_f32, f32::max);
+        let min = v.iter().cloned().fold(0.0_f32, f32::min);
+        assert!(max <= 1.0 && min >= -1.0, "out of range: [{min}, {max}]");
+        assert!(max > 0.4 && min < -0.4, "square should swing both rails: [{min}, {max}]");
+    }
+
+    #[test]
+    fn square_voice_traverses_range() {
+        let adsr = AdsrParams {
+            attack: 0.0,
+            decay: 0.0,
+            sustain: 1.0,
+            release: 0.0,
+        };
+        let v = render_voice_square(220.0, 0.05, adsr, 0.5);
+        let span = v.iter().cloned().fold(0.0_f32, f32::max)
+            - v.iter().cloned().fold(0.0_f32, f32::min);
+        assert!(span > 1.5, "square peak-to-peak too small: {span}");
+    }
+
+    #[test]
+    fn square_pulse_width_clamped() {
+        // 0.0 や 1.0 が来てもクラッシュせず音が出る (内部で 0.05-0.95 にクランプ)
+        let adsr = AdsrParams {
+            attack: 0.0,
+            decay: 0.0,
+            sustain: 1.0,
+            release: 0.0,
+        };
+        let narrow = render_voice_square(440.0, 0.05, adsr, 0.0);
+        let wide = render_voice_square(440.0, 0.05, adsr, 1.0);
+        let span_narrow = narrow.iter().cloned().fold(0.0_f32, f32::max)
+            - narrow.iter().cloned().fold(0.0_f32, f32::min);
+        let span_wide = wide.iter().cloned().fold(0.0_f32, f32::max)
+            - wide.iter().cloned().fold(0.0_f32, f32::min);
+        // 極端な pulse_width でも両極に振れていれば clamp が効いている
+        assert!(span_narrow > 1.0, "narrow pulse too small: {span_narrow}");
+        assert!(span_wide > 1.0, "wide pulse too small: {span_wide}");
     }
 }
