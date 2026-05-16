@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
-use codetta_core::{self as core, CodettaError, Instrument, Note, Song, Track};
+use codetta_core::{self as core, CodettaError, Effect, Instrument, Note, Song, Track};
 use serde_json::{json, Map, Value};
 
 #[derive(Parser)]
@@ -56,6 +56,10 @@ enum Command {
     AddNotes(AddNotesArgs),
     /// トラックのノートを全削除
     ClearNotes(ClearNotesArgs),
+    /// トラックの楽器を変更
+    SetInstrument(SetInstrumentArgs),
+    /// トラックのエフェクトチェーンを全置換
+    SetFx(SetFxArgs),
 }
 
 #[derive(Args)]
@@ -163,6 +167,33 @@ struct ClearNotesArgs {
 }
 
 #[derive(Args)]
+struct SetInstrumentArgs {
+    path: PathBuf,
+    /// 対象トラック ID
+    #[arg(long)]
+    track: String,
+    /// 楽器 type (必須)
+    #[arg(long = "type")]
+    kind: String,
+    /// 楽器 params の JSON オブジェクト (省略時は空)
+    #[arg(long = "params-json")]
+    params_json: Option<String>,
+}
+
+#[derive(Args)]
+struct SetFxArgs {
+    path: PathBuf,
+    #[arg(long)]
+    track: String,
+    /// fx チェーンを JSON 配列で渡す (排他: `--fx-file`)。
+    /// 各要素は `{"type":"<name>", ...params}` 形式。
+    #[arg(long = "fx-json", conflicts_with = "fx_file")]
+    fx_json: Option<String>,
+    #[arg(long = "fx-file", conflicts_with = "fx_json")]
+    fx_file: Option<PathBuf>,
+}
+
+#[derive(Args)]
 struct RenderArgs {
     /// 入力 `.codetta` ファイル
     path: PathBuf,
@@ -189,6 +220,8 @@ fn main() -> ExitCode {
         Command::SetNotes(a) => cmd_set_notes(a, &cli.common),
         Command::AddNotes(a) => cmd_add_notes(a, &cli.common),
         Command::ClearNotes(a) => cmd_clear_notes(a, &cli.common),
+        Command::SetInstrument(a) => cmd_set_instrument(a, &cli.common),
+        Command::SetFx(a) => cmd_set_fx(a, &cli.common),
     };
     ExitCode::from(exit)
 }
@@ -490,6 +523,94 @@ fn cmd_clear_notes(args: ClearNotesArgs, common: &CommonOpts) -> u8 {
     }
     emit_json(&json!({ "ok": true, "track_id": args.track, "removed": removed }));
     0
+}
+
+fn cmd_set_instrument(args: SetInstrumentArgs, common: &CommonOpts) -> u8 {
+    let mut song = match core::load(&args.path) {
+        Ok(s) => s,
+        Err(e) => return emit_error(&e),
+    };
+    let params = match args.params_json.as_deref() {
+        None => Map::new(),
+        Some(s) => match serde_json::from_str::<Value>(s) {
+            Ok(Value::Object(m)) => m,
+            Ok(_) => {
+                emit_json(&json!({
+                    "ok": false,
+                    "errors": [{ "code": "INVALID_JSON", "message": "--params-json must be a JSON object" }]
+                }));
+                return 1;
+            }
+            Err(e) => return emit_error(&CodettaError::InvalidJson(e)),
+        },
+    };
+    let new_instrument = Instrument {
+        kind: args.kind.clone(),
+        params,
+    };
+    let prev = match core::set_instrument(&mut song, &args.track, new_instrument) {
+        Ok(p) => p,
+        Err(e) => return emit_error(&e),
+    };
+    if let Some(code) = save_after_validate(&song, &args.path, common) {
+        return code;
+    }
+    if !common.quiet {
+        eprintln!(
+            "[OK] Set instrument on '{}': {} → {}",
+            args.track, prev, args.kind
+        );
+    }
+    emit_json(&json!({
+        "ok": true,
+        "track_id": args.track,
+        "instrument": args.kind,
+        "previous": prev,
+    }));
+    0
+}
+
+fn cmd_set_fx(args: SetFxArgs, common: &CommonOpts) -> u8 {
+    let mut song = match core::load(&args.path) {
+        Ok(s) => s,
+        Err(e) => return emit_error(&e),
+    };
+    let fx = match load_fx(args.fx_json.as_deref(), args.fx_file.as_deref()) {
+        Ok(v) => v,
+        Err(code) => return code,
+    };
+    let count = match core::set_fx(&mut song, &args.track, fx) {
+        Ok(n) => n,
+        Err(e) => return emit_error(&e),
+    };
+    if let Some(code) = save_after_validate(&song, &args.path, common) {
+        return code;
+    }
+    if !common.quiet {
+        eprintln!("[OK] Set {count} fx on track '{}'", args.track);
+    }
+    emit_json(&json!({ "ok": true, "track_id": args.track, "fx_count": count }));
+    0
+}
+
+/// `--fx-json` / `--fx-file` から `Vec<Effect>` を取り出す。
+/// 両方未指定なら空配列 (= 「fx チェーンをクリア」)。
+fn load_fx(json_str: Option<&str>, file: Option<&Path>) -> Result<Vec<Effect>, u8> {
+    let raw: String = match (json_str, file) {
+        (Some(s), _) => s.to_string(),
+        (None, Some(p)) => match std::fs::read_to_string(p) {
+            Ok(s) => s,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(emit_error(&CodettaError::FileNotFound(p.to_path_buf())));
+            }
+            Err(e) => return Err(emit_error(&CodettaError::Io(e))),
+        },
+        (None, None) => "[]".to_string(),
+    };
+    match serde_json::from_str::<Vec<Effect>>(&raw) {
+        Ok(v) => Ok(v),
+        Err(e) => Err(emit_error(&CodettaError::InvalidJson(e))),
+    }
 }
 
 /// `--notes-json` / `--notes-file` のいずれかから `Vec<Note>` を取り出す。
