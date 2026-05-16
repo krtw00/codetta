@@ -8,7 +8,7 @@
 //!
 //! Phase 0 first cut のサポート:
 //!
-//! - 楽器: `sin` / `saw` / `saw_lead` / `square` / `square_bass` (他はスキップして無音)
+//! - 楽器: `sin` / `saw` / `saw_lead` / `square` / `square_bass` / `triangle` (他はスキップして無音)
 //! - サンプルレート: 44.1kHz / ビット深度: 16bit / stereo
 //! - エフェクト: 未実装 (track.fx は無視)
 //! - `--from` / `--to` トリミング: 未対応 (CLI 側で beat → samples 変換時に slice)
@@ -70,7 +70,8 @@ pub fn render_to_buffer(song: &Song) -> Vec<(f32, f32)> {
                 let pw = pulse_width_from_params(&track.instrument.params);
                 Box::new(move |f, h| manual::render_voice_square(f, h, adsr, pw))
             }
-            _ => continue, // 未実装 (triangle / saw_pad / drum_kit はまだ無音)
+            "triangle" => Box::new(move |f, h| manual::render_voice_triangle(f, h, adsr)),
+            _ => continue, // 未実装 (saw_pad / drum_kit はまだ無音)
         };
         let (gain_l, gain_r) = pan_gains(track.pan);
         let vol = track.volume;
@@ -198,13 +199,25 @@ mod tests {
     #[test]
     fn unknown_instrument_silently_skipped() {
         let mut s = one_note_song();
-        s.tracks[0].instrument = Instrument::new("triangle"); // 現状未実装 (triangle は次に追加予定)
+        s.tracks[0].instrument = Instrument::new("saw_pad"); // 現状未実装 (saw_pad は次に追加予定)
         let buf = render_to_buffer(&s);
         let peak = buf
             .iter()
             .map(|(l, r)| l.abs().max(r.abs()))
             .fold(0.0_f32, f32::max);
         assert_eq!(peak, 0.0);
+    }
+
+    #[test]
+    fn triangle_renders_audio() {
+        let mut s = one_note_song();
+        s.tracks[0].instrument = Instrument::new("triangle");
+        let buf = render_to_buffer(&s);
+        let peak = buf
+            .iter()
+            .map(|(l, r)| l.abs().max(r.abs()))
+            .fold(0.0_f32, f32::max);
+        assert!(peak > 0.1, "triangle should produce audible output, got {peak}");
     }
 
     #[test]
