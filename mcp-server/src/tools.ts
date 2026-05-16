@@ -15,6 +15,21 @@ import { getWorkspace, resolveSongPath } from "./workspace.js";
  * `ok: false` のときは `isError: true` を立てる (MCP クライアントが
  * エラー扱いできるように)。
  */
+/**
+ * `args.push(flag, value)` の代わりに使う helper。
+ *
+ * `value` が `-` で始まる場合は clap が `-0` 等のフラグと誤認するので
+ * `--flag=value` 形式 1 引数で渡す。負の数値 (pan: -0.2 等) を CLI に
+ * 安全に渡すのが主な動機。
+ */
+function pushOpt(args: string[], flag: string, value: string): void {
+  if (value.startsWith("-")) {
+    args.push(`${flag}=${value}`);
+  } else {
+    args.push(flag, value);
+  }
+}
+
 function jsonContent(value: unknown): {
   content: { type: "text"; text: string }[];
   structuredContent?: { [x: string]: unknown };
@@ -107,12 +122,12 @@ export function registerTools(server: McpServer): void {
     async (input) => {
       const path = resolveSongPath(input.path);
       const args = ["new", path];
-      if (input.name !== undefined) args.push("--name", input.name);
-      if (input.bpm !== undefined) args.push("--bpm", String(input.bpm));
-      if (input.key !== undefined) args.push("--key", input.key);
+      if (input.name !== undefined) pushOpt(args, "--name", input.name);
+      if (input.bpm !== undefined) pushOpt(args, "--bpm", String(input.bpm));
+      if (input.key !== undefined) pushOpt(args, "--key", input.key);
       if (input.time_signature !== undefined) {
         const [n, d] = input.time_signature;
-        args.push("--time-sig", `${n}/${d}`);
+        pushOpt(args, "--time-sig", `${n}/${d}`);
       }
       if (input.overwrite === true) args.push("--force");
 
@@ -152,14 +167,9 @@ export function registerTools(server: McpServer): void {
     },
     async (input) => {
       const path = resolveSongPath(input.path);
-      const args = [
-        "set-notes",
-        path,
-        "--track",
-        input.track_id,
-        "--notes-json",
-        JSON.stringify(input.notes),
-      ];
+      const args = ["set-notes", path];
+      pushOpt(args, "--track", input.track_id);
+      pushOpt(args, "--notes-json", JSON.stringify(input.notes));
       const result = await runCliAsToolResult(args);
       return jsonContent(result);
     },
@@ -191,9 +201,10 @@ export function registerTools(server: McpServer): void {
           ? resolveSongPath(input.output)
           : songPath.replace(/\.codetta$/, "") + ".wav";
 
-      const args = ["render", songPath, "--output", outPath];
+      const args = ["render", songPath];
+      pushOpt(args, "--output", outPath);
       if (input.sample_rate !== undefined) {
-        args.push("--sample-rate", String(input.sample_rate));
+        pushOpt(args, "--sample-rate", String(input.sample_rate));
       }
       const result = await runCliAsToolResult(args);
       return jsonContent(result);
@@ -240,14 +251,16 @@ export function registerTools(server: McpServer): void {
     },
     async (input) => {
       const path = resolveSongPath(input.path);
-      const args = ["add-track", path, "--id", input.track_id];
-      if (input.name !== undefined) args.push("--name", input.name);
+      const args = ["add-track", path];
+      pushOpt(args, "--id", input.track_id);
+      if (input.name !== undefined) pushOpt(args, "--name", input.name);
       if (input.instrument !== undefined)
-        args.push("--instrument", input.instrument);
-      if (input.volume !== undefined) args.push("--volume", String(input.volume));
-      if (input.pan !== undefined) args.push("--pan", String(input.pan));
+        pushOpt(args, "--instrument", input.instrument);
+      if (input.volume !== undefined)
+        pushOpt(args, "--volume", String(input.volume));
+      if (input.pan !== undefined) pushOpt(args, "--pan", String(input.pan));
       if (input.params !== undefined)
-        args.push("--params-json", JSON.stringify(input.params));
+        pushOpt(args, "--params-json", JSON.stringify(input.params));
 
       const result = await runCliAsToolResult(args);
       return jsonContent(result);
@@ -309,16 +322,11 @@ export function registerTools(server: McpServer): void {
     },
     async (input) => {
       const path = resolveSongPath(input.path);
-      const args = [
-        "set-instrument",
-        path,
-        "--track",
-        input.track_id,
-        "--type",
-        input.type,
-      ];
+      const args = ["set-instrument", path];
+      pushOpt(args, "--track", input.track_id);
+      pushOpt(args, "--type", input.type);
       if (input.params !== undefined)
-        args.push("--params-json", JSON.stringify(input.params));
+        pushOpt(args, "--params-json", JSON.stringify(input.params));
 
       const result = await runCliAsToolResult(args);
       return jsonContent(result);
@@ -342,14 +350,9 @@ export function registerTools(server: McpServer): void {
     },
     async (input) => {
       const path = resolveSongPath(input.path);
-      const args = [
-        "set-fx",
-        path,
-        "--track",
-        input.track_id,
-        "--fx-json",
-        JSON.stringify(input.fx),
-      ];
+      const args = ["set-fx", path];
+      pushOpt(args, "--track", input.track_id);
+      pushOpt(args, "--fx-json", JSON.stringify(input.fx));
       const result = await runCliAsToolResult(args);
       return jsonContent(result);
     },
@@ -372,14 +375,9 @@ export function registerTools(server: McpServer): void {
     },
     async (input) => {
       const path = resolveSongPath(input.path);
-      const args = [
-        "edit-notes",
-        path,
-        "--track",
-        input.track_id,
-        "--ops-json",
-        JSON.stringify(input.ops),
-      ];
+      const args = ["edit-notes", path];
+      pushOpt(args, "--track", input.track_id);
+      pushOpt(args, "--ops-json", JSON.stringify(input.ops));
       const result = await runCliAsToolResult(args);
       return jsonContent(result);
     },
@@ -416,14 +414,9 @@ export function registerTools(server: McpServer): void {
     },
     async (input) => {
       const path = resolveSongPath(input.path);
-      const args = [
-        "add-notes",
-        path,
-        "--track",
-        input.track_id,
-        "--notes-json",
-        JSON.stringify(input.notes),
-      ];
+      const args = ["add-notes", path];
+      pushOpt(args, "--track", input.track_id);
+      pushOpt(args, "--notes-json", JSON.stringify(input.notes));
       const result = await runCliAsToolResult(args);
       return jsonContent(result);
     },
@@ -442,7 +435,8 @@ export function registerTools(server: McpServer): void {
     },
     async (input) => {
       const path = resolveSongPath(input.path);
-      const args = ["clear-notes", path, "--track", input.track_id];
+      const args = ["clear-notes", path];
+      pushOpt(args, "--track", input.track_id);
       const result = await runCliAsToolResult(args);
       return jsonContent(result);
     },
@@ -461,7 +455,8 @@ export function registerTools(server: McpServer): void {
     },
     async (input) => {
       const path = resolveSongPath(input.path);
-      const args = ["remove-track", path, "--id", input.track_id];
+      const args = ["remove-track", path];
+      pushOpt(args, "--id", input.track_id);
       const result = await runCliAsToolResult(args);
       return jsonContent(result);
     },
