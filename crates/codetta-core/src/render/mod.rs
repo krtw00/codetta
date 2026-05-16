@@ -13,16 +13,19 @@
 //! - エフェクト: `lowpass` / `highpass` / `distortion` / `delay` / `reverb` を track.fx として適用 (順序通り)
 //! - `--from` / `--to` トリミング: 未対応 (CLI 側で beat → samples 変換時に slice)
 
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use hound::{SampleFormat, WavSpec, WavWriter};
+use rustysynth::SoundFont;
 
 use crate::effect;
 use crate::error::CodettaError;
 use crate::model::{Effect, Song};
 use crate::synth::soundfont::{
-    render_soundfont_track, resolve_soundfont_path, SoundFontParams, SoundFontTrackNote,
-    SoundFontTrackRender,
+    load_soundfont, render_soundfont_track_with, resolve_soundfont_path, SoundFontParams,
+    SoundFontTrackNote, SoundFontTrackRender,
 };
 use crate::synth::{manual, midi_to_freq, AdsrParams, SAMPLE_RATE};
 
@@ -64,6 +67,11 @@ pub fn render_to_buffer(song: &Song) -> Vec<(f32, f32)> {
     let total_samples = (total_sec * sr).ceil() as usize;
     let mut master = vec![(0.0_f32, 0.0_f32); total_samples];
 
+    // 同一 SF2 を複数 track で参照する場合の load 重複回避用 cache。
+    // key は `resolve_soundfont_path` 後の絶対 / 相対 path。 異なる文字列で同じ
+    // ファイルを指していた場合は cache miss するが、 動作は変わらず optimization の損だけ。
+    let mut sf2_cache: HashMap<PathBuf, Arc<SoundFont>> = HashMap::new();
+
     for track in &song.tracks {
         if track.mute {
             continue;
@@ -83,6 +91,22 @@ pub fn render_to_buffer(song: &Song) -> Vec<(f32, f32)> {
                 Err(_) => continue, // validate 側で報告済み
             };
             let resolved = resolve_soundfont_path(&sf_params.file);
+            let sound_font = match sf2_cache.get(&resolved) {
+                Some(sf) => sf.clone(),
+                None => match load_soundfont(&resolved) {
+                    Ok(sf) => {
+                        sf2_cache.insert(resolved.clone(), sf.clone());
+                        sf
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "warning: soundfont track {:?} skipped due to load error: {}",
+                            track.id, e
+                        );
+                        continue;
+                    }
+                },
+            };
             let mut notes: Vec<SoundFontTrackNote> = track
                 .notes
                 .iter()
@@ -112,7 +136,7 @@ pub fn render_to_buffer(song: &Song) -> Vec<(f32, f32)> {
                 total_samples,
                 notes,
             };
-            match render_soundfont_track(&cfg) {
+            match render_soundfont_track_with(&cfg, sound_font) {
                 Ok(stereo) => {
                     // velocity は SF2 内部で note_on velocity として既に効いている。
                     // 残るのは track.volume と pan。 pan は左右 gain として乗算。
@@ -737,6 +761,85 @@ mod tests {
             .map(|(l, r)| l.abs().max(r.abs()))
             .fold(0.0_f32, f32::max);
         assert!(peak > 0.01, "SF2 render should produce audible output, got {peak}");
+    }
+
+    #[test]
+    fn soundfont_two_tracks_share_load_and_render_equivalently() {
+        // 同一 SF2 を 2 つの track で参照したとき、 SF2 cache を経由しても
+        // 「2 track の合算」 = 「1 track 単体 × 2 の合算」 になることを確認する。
+        // cache 利用後の Synthesizer 状態が track 間で漏れていないことの担保。
+        let Some(sf2) = std::env::var("CODETTA_TEST_SF2").ok() else {
+            eprintln!("CODETTA_TEST_SF2 not set — skipping SF2 cache equivalence test");
+            return;
+        };
+        let mut inst = Instrument::new("soundfont");
+        inst.params.insert("file".into(), serde_json::json!(sf2));
+        inst.params.insert("preset".into(), serde_json::json!(0));
+
+        // baseline: 1 track のみ render
+        let mut s_one = Song::new("one", 120, None);
+        s_one.tracks.push(Track {
+            id: "t1".into(),
+            name: "T1".into(),
+            instrument: inst.clone(),
+            volume: 0.5,
+            pan: 0.0,
+            mute: false,
+            solo: false,
+            fx: vec![],
+            notes: vec![Note {
+                t: 0.0,
+                pitch: Pitch::Name("A4".into()),
+                dur: 1.0,
+                vel: 100,
+            }],
+        });
+        let buf_one = render_to_buffer(&s_one);
+
+        // dual: 同一 SF2 / 同一 note を 2 track 並列 (片方 pan 中央 + volume 半分 ×2)
+        let mut s_two = s_one.clone();
+        s_two.tracks.push(s_two.tracks[0].clone());
+        s_two.tracks[1].id = "t2".into();
+        let buf_two = render_to_buffer(&s_two);
+
+        // 出力長は等しい
+        assert_eq!(buf_one.len(), buf_two.len(), "duration should match");
+
+        // 2 track 合算は 1 track の概ね 2 倍 (soft clip による頭打ちで完全 2 倍にはならない)。
+        // 期待値: 各サンプルが 2 倍された後 soft_clip(2x) を通った値。 つまり
+        //   y2[i] = soft_clip(2 * soft_clip_inv(y1[i]))
+        // を直接検証するのは過剰なので、 単純に「ピークが上がる」「波形がほぼ符号一致」のみ確認。
+        let peak_one = buf_one
+            .iter()
+            .map(|(l, r)| l.abs().max(r.abs()))
+            .fold(0.0_f32, f32::max);
+        let peak_two = buf_two
+            .iter()
+            .map(|(l, r)| l.abs().max(r.abs()))
+            .fold(0.0_f32, f32::max);
+        assert!(
+            peak_two > peak_one,
+            "two tracks should be louder than one: {peak_one} vs {peak_two}"
+        );
+
+        // サンプルごとの符号 (rough waveform 一致) を確認: 全サンプル中、
+        // L チャンネルで両方とも sign が一致する割合が高いはず。
+        let mut total = 0usize;
+        let mut agree = 0usize;
+        for ((l1, _), (l2, _)) in buf_one.iter().zip(buf_two.iter()) {
+            if l1.abs() < 1e-4 && l2.abs() < 1e-4 {
+                continue; // 無音区間 (両方 0) は除外
+            }
+            total += 1;
+            if l1.signum() == l2.signum() {
+                agree += 1;
+            }
+        }
+        // 同じ SF2 / 同じ note なので波形は単なる加算 + soft_clip。 符号一致率は十分高いはず。
+        assert!(
+            total > 0 && (agree as f32 / total as f32) > 0.95,
+            "two-track waveform sign should match single-track baseline: {agree}/{total}"
+        );
     }
 
     #[test]
