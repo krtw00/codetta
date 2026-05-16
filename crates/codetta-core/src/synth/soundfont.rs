@@ -178,10 +178,23 @@ pub struct SoundFontTrackNote {
 /// rustysynth の `Synthesizer` は内部に channel/voice state を持つため per-voice 独立 closure
 /// にはできない。 ここで note_on / note_off / render を時刻順に駆動し、 末尾の release tail も
 /// `total_samples` まで render し切る。
-pub fn render_soundfont_track(
+///
+/// 同一 SF2 を複数 track で参照する場合は `load_soundfont` で 1 度だけ load し
+/// `render_soundfont_track_with` に `Arc<SoundFont>` を渡すと load を共有できる。
+/// このトップレベル fn は単発 render 用に毎回 load する path を保持する。
+pub fn render_soundfont_track(cfg: &SoundFontTrackRender) -> Result<StereoBuffer, SoundFontError> {
+    let sound_font = load_soundfont(&cfg.sf2_path)?;
+    render_soundfont_track_with(cfg, sound_font)
+}
+
+/// 既に load 済みの `Arc<SoundFont>` を使って track を render する。
+///
+/// `render_to_buffer` 側で同一 SF2 を track 跨ぎで共有するための entry point。
+pub fn render_soundfont_track_with(
     cfg: &SoundFontTrackRender,
+    sound_font: Arc<SoundFont>,
 ) -> Result<StereoBuffer, SoundFontError> {
-    let mut synth = open_synth(&cfg.sf2_path, cfg.sample_rate, cfg.bank, cfg.preset)?;
+    let mut synth = open_synth_with(sound_font, cfg.sample_rate, cfg.bank, cfg.preset)?;
 
     let channel: i32 = 0;
     let mut left = vec![0.0f32; cfg.total_samples];
@@ -220,12 +233,11 @@ pub fn render_soundfont_track(
     Ok(StereoBuffer { left, right })
 }
 
-fn open_synth(
-    sf2_path: &Path,
-    sample_rate: u32,
-    bank: u16,
-    preset: u16,
-) -> Result<Synthesizer, SoundFontError> {
+/// SF2 ファイルを memory に load して `Arc<SoundFont>` として返す。
+///
+/// `Arc` で返すので、 複数の track / 複数の `Synthesizer` に同じ instance を渡して
+/// load 重複を避けられる (`render_to_buffer` の SF2 cache が利用)。
+pub fn load_soundfont(sf2_path: &Path) -> Result<Arc<SoundFont>, SoundFontError> {
     if !sf2_path.exists() {
         return Err(SoundFontError::NotFound(sf2_path.to_path_buf()));
     }
@@ -239,8 +251,17 @@ fn open_synth(
         path: sf2_path.to_path_buf(),
         message: format!("{:?}", e),
     })?;
-    let sound_font = Arc::new(sound_font);
 
+    Ok(Arc::new(sound_font))
+}
+
+/// load 済みの `Arc<SoundFont>` から `Synthesizer` を初期化し、 bank select + program change を送る。
+fn open_synth_with(
+    sound_font: Arc<SoundFont>,
+    sample_rate: u32,
+    bank: u16,
+    preset: u16,
+) -> Result<Synthesizer, SoundFontError> {
     let settings = SynthesizerSettings::new(sample_rate as i32);
     let mut synth = Synthesizer::new(&sound_font, &settings)
         .map_err(|e| SoundFontError::Synth(format!("{:?}", e)))?;
@@ -252,6 +273,16 @@ fn open_synth(
     synth.process_midi_message(channel, 0xC0, preset as i32, 0);
 
     Ok(synth)
+}
+
+fn open_synth(
+    sf2_path: &Path,
+    sample_rate: u32,
+    bank: u16,
+    preset: u16,
+) -> Result<Synthesizer, SoundFontError> {
+    let sound_font = load_soundfont(sf2_path)?;
+    open_synth_with(sound_font, sample_rate, bank, preset)
 }
 
 /// SF2 ファイルのメタ情報 (header chunk からの抜粋)。
@@ -527,6 +558,55 @@ mod tests {
             meta.version.contains('.'),
             "version should be major.minor: {}",
             meta.version
+        );
+    }
+
+    #[test]
+    fn load_soundfont_returns_not_found_for_missing_file() {
+        let err = load_soundfont(Path::new("/nonexistent/codetta-test/missing.sf2")).unwrap_err();
+        assert!(matches!(err, SoundFontError::NotFound(_)));
+    }
+
+    #[test]
+    fn load_soundfont_arc_is_shareable_when_sf2_available() {
+        // 同一 SF2 を 2 回 load せず、 Arc::clone で複数の render_soundfont_track_with に
+        // 渡せることを確認する (render/mod.rs の SF2 cache が期待する API 形)。
+        let Some(sf2) = sf2_from_env() else {
+            eprintln!("CODETTA_TEST_SF2 not set — skipping load_soundfont Arc share test");
+            return;
+        };
+        let sf = load_soundfont(&sf2).expect("SF2 load should succeed");
+
+        // Arc::clone で 2 つの track をそれぞれ render しても落ちず、 同じ仕様なら同じ波形になる。
+        let sr = 44100u32;
+        let total = (sr as f32 * 1.0) as usize;
+        let notes = vec![SoundFontTrackNote {
+            start_sample: 0,
+            end_sample: (sr as f32 * 0.5) as usize,
+            midi_key: 60,
+            velocity: 100,
+        }];
+        let cfg = SoundFontTrackRender {
+            sf2_path: sf2.clone(),
+            preset: 0,
+            bank: 0,
+            sample_rate: sr,
+            total_samples: total,
+            notes,
+        };
+        let a = render_soundfont_track_with(&cfg, sf.clone()).expect("render a");
+        let b = render_soundfont_track_with(&cfg, sf.clone()).expect("render b");
+        assert_eq!(a.left.len(), b.left.len());
+        // 同じ SF2 / 同じ cfg → 完全に同一の output になる (deterministic)
+        let max_diff = a
+            .left
+            .iter()
+            .zip(b.left.iter())
+            .map(|(x, y)| (x - y).abs())
+            .fold(0.0_f32, f32::max);
+        assert!(
+            max_diff < 1e-6,
+            "shared Arc<SoundFont> should produce identical output: max_diff={max_diff}"
         );
     }
 
