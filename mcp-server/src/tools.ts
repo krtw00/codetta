@@ -135,6 +135,14 @@ export function registerTools(server: McpServer): void {
           .tuple([z.number().int().positive(), z.number().int().positive()])
           .optional()
           .describe("拍子 [N, D] (default [4, 4])"),
+        master_gain: z
+          .number()
+          .min(0)
+          .max(4)
+          .optional()
+          .describe(
+            "全 track 合算後 (soft_clip 前) に乗算する master gain。 0.0-4.0 (default 1.0)。 SF2 系で内蔵合成より peak が低い時のヘッドルーム調整に使う。 dogfooding 推奨値は 2.0",
+          ),
         overwrite: z
           .boolean()
           .optional()
@@ -150,6 +158,9 @@ export function registerTools(server: McpServer): void {
       if (input.time_signature !== undefined) {
         const [n, d] = input.time_signature;
         pushOpt(args, "--time-sig", `${n}/${d}`);
+      }
+      if (input.master_gain !== undefined) {
+        pushOpt(args, "--master-gain", String(input.master_gain));
       }
       if (input.overwrite === true) args.push("--force");
 
@@ -375,6 +386,31 @@ export function registerTools(server: McpServer): void {
       const args = ["set-fx", path];
       pushOpt(args, "--track", input.track_id);
       pushOpt(args, "--fx-json", JSON.stringify(input.fx));
+      const result = await runCliAsToolResult(args);
+      return jsonContent(result);
+    },
+  );
+
+  // ----- set_master_gain -----
+  server.registerTool(
+    "set_master_gain",
+    {
+      title: "Set the project's master gain",
+      description:
+        "プロジェクトの metadata.master_gain を変更する。 0.0-4.0、 default 1.0。 全 track 合算後 (soft_clip 前) に乗算される post-mix gain。 SF2 系で内蔵合成より peak が低い時のヘッドルーム調整に使う。 dogfooding 推奨値は 2.0",
+      inputSchema: {
+        path: z.string().describe("対象 .codetta ファイル"),
+        value: z
+          .number()
+          .min(0)
+          .max(4)
+          .describe("master gain (0.0-4.0)"),
+      },
+    },
+    async (input) => {
+      const path = resolveSongPath(input.path);
+      const args = ["set-master-gain", path];
+      pushOpt(args, "--value", String(input.value));
       const result = await runCliAsToolResult(args);
       return jsonContent(result);
     },

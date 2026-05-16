@@ -65,6 +65,8 @@ enum Command {
     SetInstrument(SetInstrumentArgs),
     /// トラックのエフェクトチェーンを全置換
     SetFx(SetFxArgs),
+    /// プロジェクトの master_gain を変更
+    SetMasterGain(SetMasterGainArgs),
     /// ノートに対する一括変形 (transpose / shift / scale / quantize 等)
     EditNotes(EditNotesArgs),
     /// 利用可能な楽器一覧と各 type のパラメータスキーマを JSON 出力
@@ -93,6 +95,9 @@ struct NewArgs {
     /// 拍子 N/D (例: "4/4")
     #[arg(long = "time-sig", value_parser = parse_time_sig, default_value = "4/4")]
     time_sig: [u32; 2],
+    /// 全 track 合算後 (soft_clip 前) に乗算する master gain。 0.0..=4.0、 デフォルト 1.0
+    #[arg(long = "master-gain")]
+    master_gain: Option<f32>,
     /// 既存ファイルを上書き
     #[arg(long)]
     force: bool,
@@ -227,6 +232,14 @@ struct SetFxArgs {
 }
 
 #[derive(Args)]
+struct SetMasterGainArgs {
+    path: PathBuf,
+    /// 全 track 合算後 (soft_clip 前) に乗算する master gain。 0.0..=4.0
+    #[arg(long)]
+    value: f32,
+}
+
+#[derive(Args)]
 struct ListSoundfontPresetsArgs {
     /// SF2 ファイル path (絶対 or `$CODETTA_SOUNDFONT_DIR` 配下の相対)
     file: PathBuf,
@@ -261,6 +274,7 @@ fn main() -> ExitCode {
         Command::ClearNotes(a) => cmd_clear_notes(a, &cli.common),
         Command::SetInstrument(a) => cmd_set_instrument(a, &cli.common),
         Command::SetFx(a) => cmd_set_fx(a, &cli.common),
+        Command::SetMasterGain(a) => cmd_set_master_gain(a, &cli.common),
         Command::EditNotes(a) => cmd_edit_notes(a, &cli.common),
         Command::ListInstruments => cmd_list_instruments(),
         Command::ListEffects => cmd_list_effects(),
@@ -281,21 +295,31 @@ fn cmd_new(args: NewArgs, common: &CommonOpts) -> u8 {
 
     let mut song = core::Song::new(name, args.bpm, args.key);
     song.metadata.time_signature = args.time_sig;
+    if let Some(mg) = args.master_gain {
+        song.metadata.master_gain = mg;
+    }
 
     if !common.quiet {
         eprintln!("[INFO] Creating {}", args.path.display());
     }
 
-    if let Err(e) = core::save(&song, &args.path, args.force) {
-        return emit_error(&e);
+    if args.path.exists() && !args.force {
+        return emit_error(&CodettaError::FileExists(args.path.clone()));
     }
+    let warnings = match save_after_validate(&song, &args.path, common) {
+        Ok(w) => w,
+        Err(code) => return code,
+    };
 
     let abs = std::fs::canonicalize(&args.path).unwrap_or_else(|_| args.path.clone());
-    emit_json(&json!({
-        "ok": true,
-        "path": abs.to_string_lossy(),
-        "version": core::SCHEMA_VERSION,
-    }));
+    emit_json(&with_warnings(
+        json!({
+            "ok": true,
+            "path": abs.to_string_lossy(),
+            "version": core::SCHEMA_VERSION,
+        }),
+        &warnings,
+    ));
     0
 }
 
@@ -691,6 +715,27 @@ fn cmd_set_fx(args: SetFxArgs, common: &CommonOpts) -> u8 {
     }
     emit_json(&with_warnings(
         json!({ "ok": true, "track_id": args.track, "fx_count": count }),
+        &warnings,
+    ));
+    0
+}
+
+fn cmd_set_master_gain(args: SetMasterGainArgs, common: &CommonOpts) -> u8 {
+    let mut song = match core::load(&args.path) {
+        Ok(s) => s,
+        Err(e) => return emit_error(&e),
+    };
+    let prev = song.metadata.master_gain;
+    song.metadata.master_gain = args.value;
+    let warnings = match save_after_validate(&song, &args.path, common) {
+        Ok(w) => w,
+        Err(code) => return code,
+    };
+    if !common.quiet {
+        eprintln!("[OK] master_gain {prev} -> {}", args.value);
+    }
+    emit_json(&with_warnings(
+        json!({ "ok": true, "master_gain": args.value, "previous": prev }),
         &warnings,
     ));
     0

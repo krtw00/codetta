@@ -4,7 +4,7 @@
  *
  * 1. `node dist/index.js` を spawn
  * 2. MCP プロトコルの initialize / tools/list / resources/list / resources/templates/list
- * 3. **全 15 tool を最低 1 回叩いて** isError なしを確認
+ * 3. **list_soundfont_presets を除く全 tool を最低 1 回叩いて** isError なしを確認
  * 4. golden path (create_song -> add_track -> set_notes -> render_wav) を MCP のみで完結
  */
 import { spawn } from "node:child_process";
@@ -111,10 +111,12 @@ async function callTool(name, args) {
     "list_effects",
     "list_instruments",
     "list_songs",
+    "list_soundfont_presets",
     "remove_track",
     "render_wav",
     "set_fx",
     "set_instrument",
+    "set_master_gain",
     "set_notes",
     "validate_song",
   ];
@@ -377,6 +379,15 @@ async function callTool(name, args) {
     console.log("[ok] resources/read songs/no-such-song -> rejected");
   }
 
+  // set_master_gain (post-mix gain を 2.0 に上げる)
+  const setMg = await callTool("set_master_gain", {
+    path: songName,
+    value: 2.0,
+  });
+  assert(setMg.master_gain === 2.0, `set_master_gain master_gain != 2.0 (got ${setMg.master_gain})`);
+  assert(setMg.previous === 1.0, `set_master_gain previous != 1.0 (got ${setMg.previous})`);
+  console.log("[ok] set_master_gain -> 1.0 -> 2.0");
+
   // render_wav
   const renderStruct = await callTool("render_wav", { path: songName });
   assert(
@@ -407,7 +418,7 @@ async function callTool(name, args) {
   assert(info2.tracks.length === 1, `tracks != 1 after remove_track (got ${info2.tracks.length})`);
   console.log("[ok] remove_track drum -> 1 track remaining");
 
-  console.log("\nAll smoke checks passed (15 tools + 5 resource endpoints).");
+  console.log("\nAll smoke checks passed (16 tools + 5 resource endpoints).");
   child.kill();
   process.exit(0);
 })().catch((e) => {
