@@ -26,7 +26,7 @@ async function main(): Promise<void> {
         resources: { listChanged: false },
       },
       instructions:
-        "Codetta は LLM ネイティブな軽量 DAW。list_instruments / list_effects で使える音源を確認し、create_song で .codetta を作り、set_notes でノートを書き込み、render_wav で WAV を出力する。プリセット例は resources の codetta://presets/{name} で参照できる。",
+        "Codetta は LLM ネイティブな軽量 DAW。list_instruments / list_effects で使える音源を確認し、create_song で .codetta を作り、set_notes でノートを書き込み、render_wav で WAV を出力する。Context として読みたい場合は resources を利用 — codetta://instruments / codetta://effects (カタログ)、codetta://schema/song/0.1 (.codetta の JSON Schema)、codetta://presets/{name} (サンプル曲)、codetta://songs/{name} (workspace の自作曲)。",
     },
   );
 
