@@ -243,10 +243,11 @@ pub fn render_to_buffer(song: &Song) -> Vec<(f32, f32)> {
         }
     }
 
-    // ソフトリミッタ (tanh)
+    // master gain (soft_clip 前) + ソフトリミッタ (tanh)
+    let mg = song.metadata.master_gain;
     for (l, r) in &mut master {
-        *l = soft_clip(*l);
-        *r = soft_clip(*r);
+        *l = soft_clip(*l * mg);
+        *r = soft_clip(*r * mg);
     }
     master
 }
@@ -381,6 +382,35 @@ mod tests {
             .map(|(l, r)| l.abs().max(r.abs()))
             .fold(0.0_f32, f32::max);
         assert!(peak > 0.1, "expected audible peak, got {peak}");
+    }
+
+    #[test]
+    fn master_gain_amplifies_output() {
+        // master_gain > 1.0 で peak が増える (soft_clip 内の線形領域に収まる範囲なら
+        // 単純な乗算と等価)。 元の volume を小さく取って soft_clip 飽和を避ける。
+        let mut s = one_note_song();
+        s.tracks[0].volume = 0.2;
+        let dry = render_to_buffer(&s);
+        s.metadata.master_gain = 3.0;
+        let wet = render_to_buffer(&s);
+        let peak_dry = dry.iter().map(|(l, _)| l.abs()).fold(0.0_f32, f32::max);
+        let peak_wet = wet.iter().map(|(l, _)| l.abs()).fold(0.0_f32, f32::max);
+        assert!(
+            peak_wet > peak_dry * 2.0,
+            "master_gain=3.0 should noticeably raise peak: dry={peak_dry} wet={peak_wet}"
+        );
+    }
+
+    #[test]
+    fn master_gain_zero_silences_output() {
+        let mut s = one_note_song();
+        s.metadata.master_gain = 0.0;
+        let buf = render_to_buffer(&s);
+        let peak = buf
+            .iter()
+            .map(|(l, r)| l.abs().max(r.abs()))
+            .fold(0.0_f32, f32::max);
+        assert_eq!(peak, 0.0);
     }
 
     #[test]

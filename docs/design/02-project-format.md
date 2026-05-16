@@ -36,6 +36,7 @@ classDiagram
         +int bpm
         +string key
         +int[] time_signature
+        +float master_gain
         +string created_at
         +string[] tags
     }
@@ -87,6 +88,7 @@ classDiagram
 | `bpm` | int | ✓ | 1 分間の拍数。 全曲固定 (Phase 0 はテンポトラック非対応) |
 | `key` | string | — | "Am", "C", "F#m" 等の調性表記。 LLM の参考用 (再生には影響しない) |
 | `time_signature` | `[int, int]` | — | 拍子。 Phase 0 では `[4, 4]` のみサポート |
+| `master_gain` | float (0.0-4.0) | — | 全 track 合算後 (`soft_clip` 前) に乗算する master gain。 デフォルト `1.0`。 SF2 楽器のように内部音量が小さい音源で全体音圧を稼ぎたい時に上げる |
 | `created_at` | ISO 8601 string | — | 作成日時 (UTC) |
 | `tags` | string[] | — | 自由タグ。 検索用 (例: `["ddc", "battle", "cyber"]`) |
 

@@ -101,6 +101,14 @@ pub fn validate(song: &Song) -> Vec<ValidationError> {
             format!("denominator must be a power of two, got {denom}"),
         ));
     }
+    let mg = song.metadata.master_gain;
+    if !mg.is_finite() || !(0.0..=4.0).contains(&mg) {
+        errors.push(ValidationError::new(
+            "INVALID_SCHEMA",
+            "metadata.master_gain",
+            format!("master_gain must be a finite number in 0.0..=4.0, got {mg}"),
+        ));
+    }
 
     // tracks
     let mut seen_ids: HashSet<&str> = HashSet::new();
@@ -291,6 +299,7 @@ mod tests {
                 bpm: 120,
                 key: None,
                 time_signature: [4, 4],
+                master_gain: 1.0,
                 created_at: None,
                 tags: vec![],
             },
@@ -327,6 +336,25 @@ mod tests {
         s.metadata.bpm = 5;
         let errs = validate(&s);
         assert!(errs.iter().any(|e| e.path == "metadata.bpm"));
+    }
+
+    #[test]
+    fn rejects_bad_master_gain() {
+        let mut s = ok_song();
+        s.metadata.master_gain = -0.1;
+        assert!(validate(&s)
+            .iter()
+            .any(|e| e.path == "metadata.master_gain"));
+        s.metadata.master_gain = 4.5;
+        assert!(validate(&s)
+            .iter()
+            .any(|e| e.path == "metadata.master_gain"));
+        s.metadata.master_gain = f32::NAN;
+        assert!(validate(&s)
+            .iter()
+            .any(|e| e.path == "metadata.master_gain"));
+        s.metadata.master_gain = 2.5;
+        assert!(validate(&s).is_empty());
     }
 
     #[test]
