@@ -1,0 +1,24 @@
+[package]
+name = "codetta-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description = "Codetta core: project model, DSP, WAV / MIDI I/O"
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+hound = "3"
+midly = "0.5"
+# DSP: fundsp 採用可否は Phase 0 実装で判断 (docs/design/05-sound.md 参照)
+# fundsp = "0.20"
+
+[dev-dependencies]
+insta = { version = "1", features = ["json"] }
