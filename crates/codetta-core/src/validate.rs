@@ -53,6 +53,21 @@ pub fn instrument_param_keys(kind: &str) -> Option<&'static [&'static str]> {
     }
 }
 
+/// エフェクト type ごとに「認識される (= レンダリングで実際に使われる) param キー一覧」を返す。
+///
+/// 未知 type は `None`。 認識外キーは validate で `UNKNOWN_PARAM` Warning として報告する。
+/// 追記時の責務: `crates/codetta-cli/src/main.rs::effect_catalog()` の params keys と
+/// 一致させる (sync test `catalog_params_match_effect_param_keys` で保証)。
+pub fn effect_param_keys(kind: &str) -> Option<&'static [&'static str]> {
+    match kind {
+        "lowpass" | "highpass" => Some(&["cutoff", "q"]),
+        "distortion" => Some(&["amount", "tone"]),
+        "delay" => Some(&["time", "feedback", "mix"]),
+        "reverb" => Some(&["size", "damp", "mix"]),
+        _ => None,
+    }
+}
+
 /// 楽曲全体を検証し、 違反を列挙する。 空 Vec なら整合性 OK。
 ///
 /// version の妥当性は `io::load` で既にチェックされている前提だが、
@@ -180,6 +195,24 @@ pub fn validate(song: &Song) -> Vec<ValidationError> {
                     format!("{tprefix}.fx[{fi}].type"),
                     format!("unknown effect type: {:?}", fx.kind),
                 ));
+            }
+
+            // fx params: 認識されない (= レンダリングで無視される) キーを警告。
+            // Effect.params は serde(flatten) なので、 JSON 上の path も
+            // `tracks[ti].fx[fi].<key>` (params キーを噛ませない)。
+            if let Some(known) = effect_param_keys(&fx.kind) {
+                for key in fx.params.keys() {
+                    if !known.iter().any(|k| k == key) {
+                        errors.push(ValidationError::warning(
+                            "UNKNOWN_PARAM",
+                            format!("{tprefix}.fx[{fi}].{key}"),
+                            format!(
+                                "param {key:?} is not recognized by effect {:?} and will be ignored at render time (known params: {known:?})",
+                                fx.kind
+                            ),
+                        ));
+                    }
+                }
             }
         }
 
@@ -452,6 +485,95 @@ mod tests {
         assert!(
             errs.is_empty(),
             "expected no errors/warnings, got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn warns_on_unknown_param_for_reverb() {
+        // reverb は size/damp/mix のみ。 feedback は delay 用 param なので warn
+        let mut s = ok_song();
+        s.tracks[0].fx[0]
+            .params
+            .insert("feedback".into(), serde_json::json!(0.5));
+        let errs = validate(&s);
+        let warn = errs.iter().find(|e| e.code == "UNKNOWN_PARAM");
+        assert!(
+            warn.is_some(),
+            "expected UNKNOWN_PARAM warning, got: {errs:?}"
+        );
+        let w = warn.unwrap();
+        assert!(
+            w.is_warning(),
+            "expected severity=warning, got: {:?}",
+            w.severity
+        );
+        assert!(w.path.ends_with(".fx[0].feedback"));
+        assert!(
+            !errs.iter().any(|e| e.is_error()),
+            "unexpected errors: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn warns_on_unknown_param_for_lowpass() {
+        // lowpass は cutoff/q のみ。 mix は reverb/delay 用 param なので warn
+        let mut s = ok_song();
+        s.tracks[0].fx[0] = Effect {
+            kind: "lowpass".into(),
+            params: {
+                let mut m = Map::new();
+                m.insert("cutoff".into(), serde_json::json!(800.0));
+                m.insert("mix".into(), serde_json::json!(0.5));
+                m
+            },
+        };
+        let errs = validate(&s);
+        assert!(
+            errs.iter().any(|e| e.code == "UNKNOWN_PARAM"
+                && e.is_warning()
+                && e.path.ends_with(".fx[0].mix")),
+            "expected UNKNOWN_PARAM warning for mix, got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn known_fx_params_do_not_warn() {
+        // delay の time/feedback/mix は OK
+        let mut s = ok_song();
+        s.tracks[0].fx[0] = Effect {
+            kind: "delay".into(),
+            params: {
+                let mut m = Map::new();
+                m.insert("time".into(), serde_json::json!("1/8"));
+                m.insert("feedback".into(), serde_json::json!(0.4));
+                m.insert("mix".into(), serde_json::json!(0.3));
+                m
+            },
+        };
+        let errs = validate(&s);
+        assert!(
+            errs.is_empty(),
+            "expected no errors/warnings, got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn unknown_effect_kind_skips_param_warning() {
+        // effect type 自体が未知なら UNKNOWN_EFFECT_TYPE のみ。 param までは追わない
+        let mut s = ok_song();
+        s.tracks[0].fx[0] = Effect {
+            kind: "warp_drive".into(),
+            params: {
+                let mut m = Map::new();
+                m.insert("foo".into(), serde_json::json!(1.0));
+                m
+            },
+        };
+        let errs = validate(&s);
+        assert!(errs.iter().any(|e| e.code == "UNKNOWN_EFFECT_TYPE"));
+        assert!(
+            !errs.iter().any(|e| e.code == "UNKNOWN_PARAM"),
+            "should not warn on params when effect type itself is unknown: {errs:?}"
         );
     }
 
