@@ -2,6 +2,7 @@
 
 > JSON ベースのテキスト形式。 人間と LLM の双方が読み・書き・編集できることを最優先。
 > バイナリブロブなし、 `git diff` が意味を持つ構造とする。
+> 音源は外付け SoundFont (SF2) に統一 (= schema 0.2)。 内蔵 synth は持たない。
 
 ## 設計原則
 
@@ -9,7 +10,8 @@
 2. **Git フレンドリー** — 1 行 1 ノートを基本に diff を意味のあるものに
 3. **明示的 > 暗黙的** — デフォルト値も書く (LLM が読んだ時に混乱しない)
 4. **拡張余地** — `version` フィールドでスキーマ進化に対応
-5. **エディタ補完が効く** — JSON Schema を公開し VSCode 等で補完可能に
+5. **音源は外付け** — `instrument.type` は `"soundfont"` のみ。 内蔵 synth のスキーマ多様性は持たない
+6. **エディタ補完が効く** — JSON Schema を公開し VSCode 等で補完可能に
 
 ## ファイル拡張子と命名
 
@@ -75,10 +77,21 @@ classDiagram
 
 ## スキーマバージョニング
 
-- `version` フィールドはセマンティックバージョニング (`"0.1"`, `"0.2"`, `"1.0"`)
+- `version` フィールドはセマンティックバージョニング (`"0.1"`, `"0.2"`, `"1.0"`) を string で記述
 - `0.x` 系: **破壊的変更を許容**。 マイグレーション CLI (`codetta migrate`) で対応
 - `1.0` 以降: **後方互換性を維持**。 メジャー番号変更時のみ破壊的変更
 - 未知のバージョンを読んだ場合は明示的にエラー (推測しない)
+
+### 0.1 と 0.2 の違い
+
+| 観点 | `"0.1"` (legacy) | `"0.2"` (現行方針) |
+|---|---|---|
+| 音源 | 内蔵 synth (`sin` / `saw` / `saw_lead` / `square` / `square_bass` / `triangle` / `saw_pad` / `drum_kit`) + `soundfont` 並列 | **`soundfont` 一本** |
+| ドラム | `instrument.type = "drum_kit"` + 要素名キー (`kick` 等) | SF2 GM Drum (`bank: 128`) + 要素名キーは LLM フレンドリーのため維持、 内部で MIDI 番号に正規化 |
+| `metadata.master_gain` | 任意 | 任意 (互換) |
+| migrate | — | `codetta migrate` (Phase 2 で追加予定) が 0.1 → 0.2 を自動変換 (instrument → 該当 GM preset への置換) |
+
+新規プロジェクトは必ず `"0.2"` で書く。 0.1 ファイルは load 時に migrate を促す warning を出す方針 (Phase 2 で確定)。
 
 ## メタデータ (`metadata`)
 
@@ -100,7 +113,7 @@ classDiagram
 |---|---|---|---|---|
 | `id` | string | ✓ | — | トラック一意 ID (kebab-case 推奨)。 Effect の send 等で参照に使う |
 | `name` | string | ✓ | — | 表示名 (重複可) |
-| `instrument` | Instrument | ✓ | — | 楽器定義 |
+| `instrument` | Instrument | ✓ | — | 楽器定義 (= 必ず `type: "soundfont"`) |
 | `volume` | float (0.0-1.0) | — | `0.8` | 音量 |
 | `pan` | float (-1.0-1.0) | — | `0.0` | パン (-1=左、 +1=右) |
 | `mute` | bool | — | `false` | ミュート |
@@ -145,9 +158,9 @@ classDiagram
 
 ### ドラム特殊扱い
 
-ドラムトラックの `instrument.type` が `"drum_kit"` の場合、 `pitch` はドラム要素名:
+ドラムトラック (= SF2 の bank 128 GM Drum Kit を参照する track) では、 `pitch` をドラム要素名で書ける。 LLM が「kick / snare / hh」 のように直観的に書くための糖衣で、 内部で GM Drum Map (MIDI 番号) に正規化される。 数値 / ノート名表記との混在も可。
 
-| キー | MIDI 番号 (GM Drum 互換) | 説明 |
+| キー | MIDI 番号 (GM Drum Map) | 説明 |
 |---|---|---|
 | `"kick"` | 36 | バスドラム |
 | `"snare"` | 38 | スネア |
@@ -160,37 +173,60 @@ classDiagram
 | `"tom_mid"` | 47 | ミッドタム |
 | `"tom_hi"` | 50 | ハイタム |
 
+ドラムキットの音色実体は SF2 ファイル側にある (= GeneralUser GS なら preset 0/bank 128 が「Standard Drum Kit」)。 SF2 を差し替えれば別のドラム音色 (Jazz / Power / Electronic 等) に切替えできる。
+
 ## 楽器 (`instrument`)
 
-`instrument.type` で楽器種別を指定。 `params` の中身は type ごとに異なる (discriminated union)。
+`instrument.type` は **`"soundfont"` のみ** (= schema 0.2)。 外付け SF2 (SoundFont 2) ファイルから音色を取得する。
 
-### シンセ系 (Phase 0)
+### `soundfont`
 
 ```json
-{ "type": "saw_lead", "params": { "attack": 0.01, "decay": 0.1, "sustain": 0.7, "release": 0.2, "filter_cutoff": 800, "filter_q": 2.0 } }
+{
+  "type": "soundfont",
+  "params": {
+    "file": "GeneralUser-GS-v1.471.sf2",
+    "preset": 0,
+    "bank": 0
+  }
+}
 ```
 
-| type | 用途 | 主要 params |
+| `params` | 型 | 必須 | デフォルト | 説明 |
+|---|---|---|---|---|
+| `file` | string | ✓ | — | SF2 ファイル path。 絶対 path or `$CODETTA_SOUNDFONT_DIR` (default `$HOME/Music/sf2/`) 配下の相対 path |
+| `preset` | int (0-127) | ✓ | — | GM Program 番号 (例: `0` = Acoustic Grand Piano、 `33` = Electric Bass、 `81` = Saw Lead) |
+| `bank` | int (0-128) | — | `0` | GM bank。 `0` = melodic、 `128` = drum kit |
+
+#### 主要 preset (GeneralUser GS / GM 互換)
+
+GM preset の完全一覧および codetta の dogfood 使い分けは [07-soundfont.md](07-soundfont.md) を参照。 ここでは LLM が頻用するもののみ:
+
+| `preset` | 楽器 | 用途例 |
 |---|---|---|
-| `"sin"` | サイン波 (純音、 サブベース) | `attack`, `decay`, `sustain`, `release` |
-| `"saw"` / `"saw_lead"` | ノコギリ波 (リード / ベース) | 上記 + `filter_cutoff`, `filter_q` |
-| `"square"` / `"square_bass"` | 矩形波 (チップチューン感) | 上記 + `pulse_width` (0.1-0.9) |
-| `"triangle"` | 三角波 (柔らかい) | ADSR のみ |
-| `"saw_pad"` | パッド系 (saw + ローパス + アタック遅め) | 上記 + `detune` (cents) |
+| `0` | Acoustic Grand Piano | バラード / アコースティック系の主役 |
+| `4` | Electric Piano 1 (Rhodes) | Lo-fi / R&B |
+| `24` | Nylon Guitar | アコギ系の主役 |
+| `33` | Electric Bass (finger) | ロック / ポップス系のベース |
+| `38` | Synth Bass 1 | EDM / シンセ系のベース |
+| `48` | String Ensemble 1 | パッド / 弦合奏 |
+| `56` | Trumpet | ブラスリード |
+| `73` | Flute | メロディ補強 |
+| `80` | Square Lead | チップチューン感のリード |
+| `81` | Saw Lead | EDM / シンセリード |
+| `88` | New Age Pad | アンビエント系パッド |
 
-### ドラム
+#### Path 解決
 
-```json
-{ "type": "drum_kit", "params": { "kit": "808" } }
-```
+- 絶対 path → そのまま
+- 相対 path → `$CODETTA_SOUNDFONT_DIR` (default `$HOME/Music/sf2/`) 配下として解釈
+- 未発見なら `SOUNDFONT_FILE_NOT_FOUND` validation error
 
-| `kit` | 説明 |
-|---|---|
-| `"808"` | TR-808 風 (低音重視、 電子) |
-| `"909"` | TR-909 風 (パンチ強め) |
-| `"chip"` | 8bit 風 (ノイズ + 短い矩形波) |
+`$CODETTA_WORKSPACE` (= 既存) と同じ env pattern。 MCP server は環境変数を継承する。
 
-詳細音色仕様は [05-sound.md](05-sound.md)。
+#### Bundle SF2
+
+Phase 4 で配布バイナリに同梱予定の `GeneralUser-GS.sf2` (約 30MB) を `file` 省略時の暗黙 default とする計画。 詳細は (Phase 4 で起こす) `09-distribution.md` 参照。
 
 ## エフェクト (`fx[]`)
 
@@ -202,7 +238,7 @@ classDiagram
 { "type": "reverb", "size": 0.6, "mix": 0.2 }
 ```
 
-### Phase 0 サポート
+### サポート type
 
 | type | params | 説明 |
 |---|---|---|
@@ -212,20 +248,21 @@ classDiagram
 | `"reverb"` | `size` (0-1), `damp` (0-1), `mix` (0-1) | リバーブ |
 | `"distortion"` | `amount` (0-1), `tone` (0-1) | 歪み |
 
-### Phase 1+ 候補
+### 将来候補
 
-`chorus`, `flanger`, `phaser`, `compressor`, `eq` (3-band) など。
+`chorus`, `flanger`, `phaser`, `compressor`, `eq` (3-band) など。 Phase 5+ で需要を見て検討。
 
-## サンプル: Cyber Battle BGM (1 ループ)
+## サンプル: Cyber Battle BGM (1 ループ、 SF2 版)
 
 ```json
 {
-  "version": "0.1",
+  "version": "0.2",
   "metadata": {
     "name": "Cyber Battle Loop",
     "bpm": 140,
     "key": "Am",
     "time_signature": [4, 4],
+    "master_gain": 2.0,
     "tags": ["ddc", "battle", "cyber"]
   },
   "tracks": [
@@ -233,8 +270,8 @@ classDiagram
       "id": "lead",
       "name": "Saw Lead",
       "instrument": {
-        "type": "saw_lead",
-        "params": { "attack": 0.01, "decay": 0.1, "sustain": 0.7, "release": 0.2, "filter_cutoff": 1200, "filter_q": 2.0 }
+        "type": "soundfont",
+        "params": { "file": "GeneralUser-GS-v1.471.sf2", "preset": 81, "bank": 0 }
       },
       "volume": 0.7,
       "pan": 0.0,
@@ -254,10 +291,10 @@ classDiagram
     },
     {
       "id": "bass",
-      "name": "Sub Bass",
+      "name": "Synth Bass",
       "instrument": {
-        "type": "sin",
-        "params": { "attack": 0.005, "decay": 0.1, "sustain": 0.9, "release": 0.1 }
+        "type": "soundfont",
+        "params": { "file": "GeneralUser-GS-v1.471.sf2", "preset": 38, "bank": 0 }
       },
       "volume": 0.9,
       "notes": [
@@ -270,7 +307,10 @@ classDiagram
     {
       "id": "drums",
       "name": "Drums",
-      "instrument": { "type": "drum_kit", "params": { "kit": "808" } },
+      "instrument": {
+        "type": "soundfont",
+        "params": { "file": "GeneralUser-GS-v1.471.sf2", "preset": 0, "bank": 128 }
+      },
       "volume": 0.8,
       "notes": [
         { "t": 0.0,  "pitch": "kick",      "dur": 0.1, "vel": 110 },
@@ -291,36 +331,57 @@ classDiagram
 
 CLI / Core は以下を検証する:
 
-- `version` が既知のバージョン
+- `version` が既知のバージョン (= `"0.2"` 現行、 `"0.1"` は legacy 警告)
 - `metadata.bpm` が 20-300 の範囲
+- `metadata.master_gain` が 0.0-4.0 の範囲 (省略時 1.0)
 - `metadata.time_signature` の分母が 2 の累乗
 - `tracks[].id` が重複しない
 - `notes[].t` が `>= 0`
 - `notes[].dur` が `> 0`
 - `notes[].vel` が `0-127` の範囲
 - `notes[].pitch` が解釈可能 (ノート名 / MIDI 番号 / ドラムキー)
-- `instrument.type` が既知の type
+- `instrument.type` が `"soundfont"` (それ以外は 0.2 で reject、 0.1 では legacy 警告)
+- `instrument.params.file` の SF2 ファイルが path 解決で見つかる (`SOUNDFONT_FILE_NOT_FOUND`)
+- `instrument.params.preset` / `bank` が範囲内
 - `fx[].type` が既知の type
 
-違反は `codetta validate` でレポート (Phase 0)。
+違反は `codetta validate` でレポート。 未知パラメータは `UNKNOWN_PARAM` warning として報告 (instrument / fx 両方)。
 
-## 拡張ポイント (Phase 1+ で追加検討)
+## 拡張ポイント (将来 Phase で追加検討)
 
-| 機能 | 追加場所 |
-|---|---|
-| パターン (ループ可能な単位の再利用) | `patterns[]` トップレベル + `tracks[].pattern_refs[]` |
-| 自動化 (volume / pan のオートメーション) | `tracks[].automation[]` |
-| テンポトラック (BPM 変化) | `metadata.bpm` を `tempo_track[]` に拡張 |
-| MIDI CC | `notes[]` 拡張 + `cc_events[]` |
-| マーカー (A メロ / サビ等) | `markers[]` トップレベル |
-| グローバルエフェクト (マスター) | `master.fx[]` トップレベル |
+| 機能 | 追加場所 | 想定 Phase |
+|---|---|---|
+| MIDI import で取り込んだ拡張属性 (`master_gain` / fx / SF2 preset/bank) を MIDI に往復維持 | Text Meta Event 埋め込み or sidecar JSON | Phase 3 (= 08-midi.md で詰める) |
+| パターン (ループ可能な単位の再利用) | `patterns[]` トップレベル + `tracks[].pattern_refs[]` | Phase 5+ |
+| 自動化 (volume / pan のオートメーション) | `tracks[].automation[]` | Phase 5+ |
+| テンポトラック (BPM 変化) | `metadata.bpm` を `tempo_track[]` に拡張 | Phase 5+ |
+| MIDI CC | `notes[]` 拡張 + `cc_events[]` | Phase 5+ |
+| マーカー (A メロ / サビ等) | `markers[]` トップレベル | Phase 5+ |
+| グローバルエフェクト (マスター) | `master.fx[]` トップレベル | Phase 5+ |
 
-これらは **Phase 0 では実装しない**。 ファイル形式の `version` を上げる契機。
+これらは現マイルストーンでは実装しない。 ファイル形式の `version` を上げる契機。
 
 ## オープンクエスチョン
 
-- [ ] `version` を `"0.1"` (string) にするか `0.1` (number) にするか → **string 採用**で確定
-- [ ] パターン (ループ可能単位) を Phase 0 で入れるか → **入れない**で確定
-- [ ] note の `pitch` 表現で `"C4"` と `60` をどちらをデフォルトにするか → **ノート名 (`"C4"`) を推奨、 両方受け付け**
-- [ ] エフェクト send/return (Phase 1+) のスキーマ
-- [ ] JSON Schema 公開先 URL (`https://codetta.dev/schemas/...`)
+- [ ] `codetta migrate` の挙動: 0.1 → 0.2 の instrument マッピング (例: `saw_lead` → preset 81、 `drum_kit/808` → preset 0/bank 128) は LUT で固定するか、 `--manual` で都度確認させるか
+- [ ] JSON Schema 公開先 URL (`https://codetta.dev/schemas/song/0.2`) → Phase 4 で確定
+- [ ] エフェクト send/return (Phase 5+) のスキーマ
+
+決着済 (履歴):
+
+- [x] `version` を `"0.1"` (string) にするか `0.1` (number) にするか → **string 採用**
+- [x] パターン (ループ可能単位) を Phase 0 で入れるか → **入れない**
+- [x] note の `pitch` 表現で `"C4"` と `60` をどちらをデフォルトにするか → **ノート名 (`"C4"`) を推奨、 両方受け付け**
+- [x] 音源は内蔵 synth か外付け SF2 か → **外付け SF2 一本化** (= schema 0.2)
+- [x] ドラムを内蔵 `drum_kit` で持つか SF2 GM Drum で解決するか → **SF2 GM Drum (bank 128)**、 ただし要素名キー (kick/snare 等) は LLM フレンドリーのため維持
+
+## 関連ドキュメント
+
+- [00-vision.md](00-vision.md) — ビジョン / ターゲット / Phase 計画
+- [01-architecture.md](01-architecture.md) — アーキテクチャ / 信号フロー / fundsp 不採用判断
+- [03-cli.md](03-cli.md) — CLI サブコマンド仕様
+- [04-mcp.md](04-mcp.md) — MCP tool 仕様
+- [06-examples.md](06-examples.md) — サンプル `.codetta`
+- [07-soundfont.md](07-soundfont.md) — SF2 統合の詳細仕様 (= メイン音源 doc)
+- 08-midi.md — MIDI import/export (Phase 3 で起こす)
+- 09-distribution.md — 配布戦略 (Phase 4 で起こす)
