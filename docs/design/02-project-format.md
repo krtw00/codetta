@@ -175,6 +175,8 @@ classDiagram
 
 ドラムキットの音色実体は SF2 ファイル側にある (= GeneralUser GS なら preset 0/bank 128 が「Standard Drum Kit」)。 SF2 を差し替えれば別のドラム音色 (Jazz / Power / Electronic 等) に切替えできる。
 
+実装注: ドラム要素名キー (`kick` 等) → GM MIDI 番号への正規化は **Phase 2 で SF2 経路に追加実装が必要**。 Phase 1+ 時点 (= `SCHEMA_VERSION = "0.1"`) では内蔵 `drum_kit` instrument 経路でのみ機能する。 schema 0.2 化で内蔵 `drum_kit` を削除する際に、 SF2 bank 128 track での drum key 解釈を render / validate 両方に組み込む。
+
 ## 楽器 (`instrument`)
 
 `instrument.type` は **`"soundfont"` のみ** (= schema 0.2)。 外付け SF2 (SoundFont 2) ファイルから音色を取得する。
