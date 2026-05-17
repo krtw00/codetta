@@ -15,6 +15,7 @@
 | `Arc<SoundFont>` キャッシュ (load 重複回避) | ✅ 実装済 (`load_soundfont` 戻り値) | 同じ |
 | `list-soundfont-presets` / `codetta://soundfonts/{name}` resource | ✅ 実装済 | 同じ |
 | ドラム track での `pitch: "kick"` 等 (SF2 経路) | 未実装 (= 内蔵 `drum_kit` track 経由のみ) | SF2 bank 128 track でも要素名キーを GM Drum MIDI 番号 (36/38/42...) に正規化 |
+| `migrate` (CDT-6) | ✅ 実装済 — 0.1 → 0.2 LUT 変換 (内蔵 synth → SF2 preset) | 内蔵 synth 撤去 (CDT-7) で本表からは外れる |
 | bundle 配布 SF2 | 未実装 | Phase 4 で `GeneralUser-GS-v2.0.3.sf2` (約 30MB) を同梱 (= 09-distribution.md で確定) |
 
 ## 立ち位置
@@ -42,7 +43,7 @@
 
 | マイルストーン | 内容 | Phase |
 |---|---|---|
-| 内蔵 synth コード削除 + schema 0.2 化 | `synth/manual.rs` 削除、 `KNOWN_INSTRUMENT_TYPES` を `soundfont` 1 種に縮退、 `render` の dispatch から内蔵 synth 分岐削除、 `Instrument::DrumKit` 廃止、 `validate` 更新、 `instrument_catalog()` を soundfont 1 entry に、 既存 fixture / test を SF2 版に書き換え、 `migrate` subcommand 実装 (LUT は 03-cli.md) | 2 |
+| 内蔵 synth コード削除 + schema 0.2 化 (CDT-7) | `synth/manual.rs` 削除、 `KNOWN_INSTRUMENT_TYPES` を `soundfont` 1 種に縮退、 `render` の dispatch から内蔵 synth 分岐削除、 `Instrument::DrumKit` 廃止、 `validate` 更新、 `instrument_catalog()` を soundfont 1 entry に、 既存 fixture / test を SF2 版に書き換え。 `migrate` subcommand 自体は CDT-6 で先行実装済 (LUT 詳細は 03-cli.md) | 2 |
 | ドラム track の SF2 経路で `pitch: "kick"` 解釈 | SF2 bank 128 track 限定で drum 要素名キー → GM Drum MIDI 番号 (36/38/42/46/39/49/51/41/47/50) に正規化、 `render` と `validate` 両方に組み込み | 2 |
 | MIDI import / export | GM Program → SF2 preset マッピング、 ドラム channel 10 → bank 128、 拡張属性 (`master_gain` / fx / SF2 preset 詳細) の Text Meta Event 埋め込み or sidecar JSON 往復 | 3 |
 | bundle SF2 配布 | 配布バイナリに `GeneralUser-GS-v2.0.3.sf2` を bundle (= 配布手段は build.rs / include_bytes! / cargo install hook 等から 09-distribution.md で選定)、 README に DL 不要記載 | 4 |

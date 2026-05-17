@@ -8,9 +8,10 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use clap::{Args, Parser, Subcommand};
+use clap::{ArgGroup, Args, Parser, Subcommand};
 use codetta_core::{
     self as core,
+    migrate::{MigrateError, DEFAULT_SF2},
     synth::soundfont::{list_soundfont_presets, resolve_soundfont_path, SoundFontError},
     CodettaError, Effect, Instrument, Note, NoteOp, Song, Track, ValidationError, KNOWN_DRUM_KEYS,
     KNOWN_EFFECT_TYPES, KNOWN_INSTRUMENT_TYPES,
@@ -77,6 +78,8 @@ enum Command {
     ListSoundfontPresets(ListSoundfontPresetsArgs),
     /// プロジェクトファイル (.codetta) の JSON Schema を出力
     Schema,
+    /// 旧 schema (0.1) を最新 (0.2) に変換し、 内蔵 synth を SF2 preset にマップする
+    Migrate(MigrateArgs),
 }
 
 #[derive(Args)]
@@ -246,6 +249,27 @@ struct ListSoundfontPresetsArgs {
 }
 
 #[derive(Args)]
+#[command(group(
+    ArgGroup::new("migrate_dest")
+        .args(["output", "in_place"])
+        .required(true)
+        .multiple(false),
+))]
+struct MigrateArgs {
+    /// 入力 `.codetta` ファイル (schema 0.1)
+    path: PathBuf,
+    /// 出力先 `.codetta` ファイル (`--in-place` と排他)
+    #[arg(short, long)]
+    output: Option<PathBuf>,
+    /// 入力ファイルを上書きする (`--output` と排他)
+    #[arg(long = "in-place")]
+    in_place: bool,
+    /// LUT 適用後の `soundfont` params.file に書き込む SF2 ファイル名 (省略時は default SF2)
+    #[arg(long, default_value = DEFAULT_SF2)]
+    sf2: String,
+}
+
+#[derive(Args)]
 struct RenderArgs {
     /// 入力 `.codetta` ファイル
     path: PathBuf,
@@ -280,6 +304,7 @@ fn main() -> ExitCode {
         Command::ListEffects => cmd_list_effects(),
         Command::ListSoundfontPresets(a) => cmd_list_soundfont_presets(a, &cli.common),
         Command::Schema => cmd_schema(),
+        Command::Migrate(a) => cmd_migrate(a, &cli.common),
     };
     ExitCode::from(exit)
 }
@@ -863,6 +888,93 @@ fn cmd_schema() -> u8 {
         "schema": song_json_schema(),
     }));
     0
+}
+
+fn cmd_migrate(args: MigrateArgs, common: &CommonOpts) -> u8 {
+    // migrate は SUPPORTED_VERSIONS の変動に独立させるため raw JSON で読む
+    // (= io::load は version を SUPPORTED_VERSIONS で弾く)。
+    let bytes = match std::fs::read(&args.path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return emit_error(&CodettaError::FileNotFound(args.path.clone()));
+        }
+        Err(e) => return emit_error(&CodettaError::Io(e)),
+    };
+    let input: Value = match serde_json::from_slice(&bytes) {
+        Ok(v) => v,
+        Err(e) => return emit_error(&CodettaError::InvalidJson(e)),
+    };
+
+    let outcome = match core::migrate_song_json(&input, Some(&args.sf2)) {
+        Ok(o) => o,
+        Err(e) => return emit_migrate_error(&e),
+    };
+
+    let output_path = if args.in_place {
+        args.path.clone()
+    } else {
+        args.output
+            .clone()
+            .expect("ArgGroup 'migrate_dest' ensures --in-place or --output is set")
+    };
+
+    let mut serialized = match serde_json::to_vec_pretty(&outcome.song) {
+        Ok(b) => b,
+        Err(e) => return emit_error(&CodettaError::InvalidJson(e)),
+    };
+    serialized.push(b'\n');
+    if let Err(e) = std::fs::write(&output_path, &serialized) {
+        return emit_error(&CodettaError::Io(e));
+    }
+
+    if !common.quiet {
+        let warn_tail = if outcome.warnings.is_empty() {
+            String::new()
+        } else {
+            format!(", {} warning(s)", outcome.warnings.len())
+        };
+        eprintln!(
+            "[OK] Migrated {} -> {} ({} -> {}, {} track(s) migrated{})",
+            args.path.display(),
+            output_path.display(),
+            outcome.from_version,
+            outcome.to_version,
+            outcome.tracks_migrated,
+            warn_tail,
+        );
+    }
+
+    let abs_in = std::fs::canonicalize(&args.path).unwrap_or_else(|_| args.path.clone());
+    let abs_out = std::fs::canonicalize(&output_path).unwrap_or_else(|_| output_path.clone());
+
+    let mut payload = json!({
+        "ok": true,
+        "input": abs_in.to_string_lossy(),
+        "output": abs_out.to_string_lossy(),
+        "from_version": outcome.from_version,
+        "to_version": outcome.to_version,
+        "tracks_migrated": outcome.tracks_migrated,
+        "instrument_mapping": outcome.instrument_mapping,
+    });
+    if !outcome.warnings.is_empty() {
+        payload["warnings"] = json!(outcome.warnings);
+    }
+    emit_json(&payload);
+    0
+}
+
+fn emit_migrate_error(e: &MigrateError) -> u8 {
+    let (code, msg) = match e {
+        MigrateError::MissingVersion => ("MIGRATE_MISSING_VERSION", e.to_string()),
+        MigrateError::NotNeeded { .. } => ("MIGRATE_NOT_NEEDED", e.to_string()),
+        MigrateError::UnsupportedVersion(_) => ("MIGRATE_UNSUPPORTED_VERSION", e.to_string()),
+        MigrateError::MalformedTrack { .. } => ("MIGRATE_MALFORMED_TRACK", e.to_string()),
+    };
+    emit_json(&json!({
+        "ok": false,
+        "errors": [{ "code": code, "message": msg }]
+    }));
+    1
 }
 
 /// 全 melodic / drum 楽器の説明 + 各 type のパラメータスキーマを構築する。

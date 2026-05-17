@@ -10,6 +10,7 @@ pub mod edit;
 pub mod effect;
 pub mod error;
 pub mod io;
+pub mod migrate;
 pub mod model;
 pub mod render;
 pub mod synth;
@@ -21,12 +22,15 @@ pub use edit::{
 };
 pub use error::{CodettaError, Severity, ValidationError};
 pub use io::{load, save};
+pub use migrate::{
+    migrate_song_json, InstrumentMapping, MigrateError, MigrateOutcome, MigrateWarning, DEFAULT_SF2,
+};
 pub use model::{Effect, Instrument, Metadata, Note, Pitch, Song, Track};
 pub use render::{render_to_buffer, render_to_wav, RenderStats};
 pub use validate::{validate, KNOWN_DRUM_KEYS, KNOWN_EFFECT_TYPES, KNOWN_INSTRUMENT_TYPES};
 
-/// 現バージョンで書き出すスキーマバージョン。
+/// 現バージョンで書き出すスキーマバージョン。 0.1 据置 (CDT-7 で 0.2 完全移行予定)。
 pub const SCHEMA_VERSION: &str = "0.1";
 
-/// 読み込み可能なスキーマバージョン一覧。
-pub const SUPPORTED_VERSIONS: &[&str] = &["0.1"];
+/// 読み込み可能なスキーマバージョン一覧。 0.1 (既存) + 0.2 (CDT-6 migrate 出力)。
+pub const SUPPORTED_VERSIONS: &[&str] = &["0.1", "0.2"];

@@ -336,6 +336,43 @@ export function registerTools(server: McpServer): void {
     },
   );
 
+  // ----- migrate_song -----
+  server.registerTool(
+    "migrate_song",
+    {
+      title: "Migrate a 0.1 song to 0.2 (internal synth → SF2)",
+      description:
+        "schema 0.1 の .codetta を 0.2 に変換する。内蔵 synth type (sin / saw / saw_lead / square / square_bass / triangle / saw_pad / drum_kit) を LUT で SF2 (`soundfont` type) preset/bank に置き換え、 元の params (ADSR / pulse_width / kit 等) は破棄する。LUT 未掲載 type は preset 0 (Acoustic Grand Piano) にフォールバックし MIGRATE_UNKNOWN_INSTRUMENT 警告を返す。 `soundfont` 既存 track は no-op。 output 省略時は `<stem>-0.2.codetta` を同一ディレクトリに書き出す (input 上書きはユーザー意図的な指定が必要)。 出力 file の妥当性検査は別途 validate_song を呼ぶこと。",
+      inputSchema: {
+        path: z.string().describe("入力 .codetta ファイル (schema 0.1)"),
+        output: z
+          .string()
+          .optional()
+          .describe("出力 .codetta path (省略時 <stem>-0.2.codetta)"),
+        sf2_file: z
+          .string()
+          .optional()
+          .describe(
+            "LUT 適用後の soundfont params.file に書き込む SF2 ファイル名。省略時は default (GeneralUser-GS-v1.471.sf2)",
+          ),
+      },
+    },
+    async (input) => {
+      const inPath = resolveSongPath(input.path);
+      const outPath =
+        input.output !== undefined
+          ? resolveSongPath(input.output)
+          : inPath.replace(/\.codetta$/, "") + "-0.2.codetta";
+
+      const args = ["migrate", inPath, "-o", outPath];
+      if (input.sf2_file !== undefined) {
+        pushOpt(args, "--sf2", input.sf2_file);
+      }
+      const result = await runCliAsToolResult(args);
+      return jsonContent(result);
+    },
+  );
+
   // ----- set_instrument -----
   server.registerTool(
     "set_instrument",
