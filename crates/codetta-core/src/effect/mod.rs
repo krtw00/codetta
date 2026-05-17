@@ -98,13 +98,7 @@ pub fn distortion(buf: &mut [(f32, f32)], amount: f32, tone: f32, sample_rate: u
 /// `delay_sec` は 0.001 - 2.0 の範囲にクランプ。 `feedback` は 0 - 0.95 で発振防止、
 /// `mix` は 0 - 1 で wet 比率 (0 で dry、 1 で wet のみ)。
 /// 1 サンプルあたり `read → write → output` の順で更新する典型的なリング buffer。
-pub fn delay(
-    buf: &mut [(f32, f32)],
-    delay_sec: f32,
-    feedback: f32,
-    mix: f32,
-    sample_rate: u32,
-) {
+pub fn delay(buf: &mut [(f32, f32)], delay_sec: f32, feedback: f32, mix: f32, sample_rate: u32) {
     let delay_sec = delay_sec.clamp(0.001, 2.0);
     let feedback = feedback.clamp(0.0, 0.95);
     let mix = mix.clamp(0.0, 1.0);
@@ -174,15 +168,18 @@ pub fn reverb(buf: &mut [(f32, f32)], size: f32, damp: f32, mix: f32, sample_rat
     // Schroeder/Freeverb 由来の 44.1kHz 想定 delay 長を、 実際の sample_rate にスケール
     let sr_scale = sample_rate as f32 / 44100.0;
     let size_scale = 0.5 + size; // 0.5x..1.5x
-    let scale_len =
-        |base: usize| ((base as f32 * size_scale * sr_scale) as usize).max(1);
+    let scale_len = |base: usize| ((base as f32 * size_scale * sr_scale) as usize).max(1);
     let scale_ap = |base: usize| ((base as f32 * sr_scale) as usize).max(1);
     const COMB_BASE: [usize; 4] = [1116, 1188, 1277, 1356];
     const ALLPASS_BASE: [usize; 2] = [556, 441];
     const STEREO_SPREAD: usize = 23;
 
-    let comb_len_l: [usize; 4] =
-        [scale_len(COMB_BASE[0]), scale_len(COMB_BASE[1]), scale_len(COMB_BASE[2]), scale_len(COMB_BASE[3])];
+    let comb_len_l: [usize; 4] = [
+        scale_len(COMB_BASE[0]),
+        scale_len(COMB_BASE[1]),
+        scale_len(COMB_BASE[2]),
+        scale_len(COMB_BASE[3]),
+    ];
     let comb_len_r: [usize; 4] = [
         scale_len(COMB_BASE[0] + STEREO_SPREAD),
         scale_len(COMB_BASE[1] + STEREO_SPREAD),
@@ -190,8 +187,10 @@ pub fn reverb(buf: &mut [(f32, f32)], size: f32, damp: f32, mix: f32, sample_rat
         scale_len(COMB_BASE[3] + STEREO_SPREAD),
     ];
     let ap_len_l: [usize; 2] = [scale_ap(ALLPASS_BASE[0]), scale_ap(ALLPASS_BASE[1])];
-    let ap_len_r: [usize; 2] =
-        [scale_ap(ALLPASS_BASE[0] + STEREO_SPREAD), scale_ap(ALLPASS_BASE[1] + STEREO_SPREAD)];
+    let ap_len_r: [usize; 2] = [
+        scale_ap(ALLPASS_BASE[0] + STEREO_SPREAD),
+        scale_ap(ALLPASS_BASE[1] + STEREO_SPREAD),
+    ];
 
     // feedback は size に対して 0.7-0.98 をリニア。 1.0 直前で発振しないよう 0.98 で打ち止め
     let feedback = 0.7 + 0.28 * size;
@@ -302,7 +301,10 @@ mod tests {
         lowpass(&mut buf, 1000.0, 1.0, SAMPLE_RATE);
         // 初期化トランジエントを除いた末尾でほぼ 0.5
         let tail_avg: f32 = buf[3000..].iter().map(|(l, _)| *l).sum::<f32>() / 1410.0;
-        assert!((tail_avg - 0.5).abs() < 0.05, "DC should pass, got {tail_avg}");
+        assert!(
+            (tail_avg - 0.5).abs() < 0.05,
+            "DC should pass, got {tail_avg}"
+        );
     }
 
     #[test]
@@ -324,7 +326,10 @@ mod tests {
         let mut buf = dc_buf(0.5, 4410);
         highpass(&mut buf, 1000.0, 1.0, SAMPLE_RATE);
         let tail_avg: f32 = buf[3000..].iter().map(|(l, _)| *l).sum::<f32>() / 1410.0;
-        assert!(tail_avg.abs() < 0.05, "DC should be blocked, got {tail_avg}");
+        assert!(
+            tail_avg.abs() < 0.05,
+            "DC should be blocked, got {tail_avg}"
+        );
     }
 
     #[test]
@@ -348,7 +353,10 @@ mod tests {
         distortion(&mut buf, 1.0, 0.5, SAMPLE_RATE);
         let peak = buf.iter().map(|(l, _)| l.abs()).fold(0.0_f32, f32::max);
         // tanh で潰すので絶対値は 1.0 未満
-        assert!(peak < 1.0, "distortion output should stay below 1.0, got {peak}");
+        assert!(
+            peak < 1.0,
+            "distortion output should stay below 1.0, got {peak}"
+        );
         // ただし無音にはならない
         assert!(peak > 0.1, "distortion output too small, got {peak}");
     }
@@ -392,7 +400,10 @@ mod tests {
         buf[0] = (1.0, 1.0);
         delay(&mut buf, 0.05, 10.0, 0.5, SAMPLE_RATE);
         let peak = buf.iter().map(|(l, _)| l.abs()).fold(0.0_f32, f32::max);
-        assert!(peak.is_finite() && peak < 50.0, "feedback clamp must hold, peak={peak}");
+        assert!(
+            peak.is_finite() && peak < 50.0,
+            "feedback clamp must hold, peak={peak}"
+        );
     }
 
     #[test]
@@ -415,7 +426,10 @@ mod tests {
     fn parse_delay_time_fallback() {
         // 不正な spec は 1/8 拍にフォールバック
         let t = parse_delay_time(&serde_json::json!(null), 120);
-        assert!((t - 0.25).abs() < 1e-3, "fallback should be 1/8 beat, got {t}");
+        assert!(
+            (t - 0.25).abs() < 1e-3,
+            "fallback should be 1/8 beat, got {t}"
+        );
     }
 
     #[test]
@@ -469,10 +483,10 @@ mod tests {
         reverb(&mut buf, 0.5, 0.5, 1.0, SAMPLE_RATE);
         // 0.2 秒以降を比較。 LR 完全同一なら spread が効いていない
         let from = (SAMPLE_RATE as f32 * 0.2) as usize;
-        let lr_diff: f32 = buf[from..]
-            .iter()
-            .map(|(l, r)| (l - r).abs())
-            .sum();
-        assert!(lr_diff > 0.01, "stereo spread should desync L/R tail, got diff={lr_diff}");
+        let lr_diff: f32 = buf[from..].iter().map(|(l, r)| (l - r).abs()).sum();
+        assert!(
+            lr_diff > 0.01,
+            "stereo spread should desync L/R tail, got diff={lr_diff}"
+        );
     }
 }

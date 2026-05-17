@@ -256,31 +256,63 @@ pub fn render_to_buffer(song: &Song) -> Vec<(f32, f32)> {
 fn apply_effect(buf: &mut [(f32, f32)], fx: &Effect, bpm: u32) {
     match fx.kind.as_str() {
         "lowpass" => {
-            let cutoff = fx.params.get("cutoff").and_then(|v| v.as_f64()).unwrap_or(1000.0) as f32;
+            let cutoff = fx
+                .params
+                .get("cutoff")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(1000.0) as f32;
             let q = fx.params.get("q").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
             effect::lowpass(buf, cutoff, q, SAMPLE_RATE);
         }
         "highpass" => {
-            let cutoff = fx.params.get("cutoff").and_then(|v| v.as_f64()).unwrap_or(1000.0) as f32;
+            let cutoff = fx
+                .params
+                .get("cutoff")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(1000.0) as f32;
             let q = fx.params.get("q").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
             effect::highpass(buf, cutoff, q, SAMPLE_RATE);
         }
         "distortion" => {
-            let amount = fx.params.get("amount").and_then(|v| v.as_f64()).unwrap_or(0.3) as f32;
-            let tone = fx.params.get("tone").and_then(|v| v.as_f64()).unwrap_or(0.5) as f32;
+            let amount = fx
+                .params
+                .get("amount")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.3) as f32;
+            let tone = fx
+                .params
+                .get("tone")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.5) as f32;
             effect::distortion(buf, amount, tone, SAMPLE_RATE);
         }
         "delay" => {
             let default_time = serde_json::json!("1/8");
             let time_spec = fx.params.get("time").unwrap_or(&default_time);
             let time_sec = effect::parse_delay_time(time_spec, bpm);
-            let feedback = fx.params.get("feedback").and_then(|v| v.as_f64()).unwrap_or(0.3) as f32;
-            let mix = fx.params.get("mix").and_then(|v| v.as_f64()).unwrap_or(0.25) as f32;
+            let feedback = fx
+                .params
+                .get("feedback")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.3) as f32;
+            let mix = fx
+                .params
+                .get("mix")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.25) as f32;
             effect::delay(buf, time_sec, feedback, mix, SAMPLE_RATE);
         }
         "reverb" => {
-            let size = fx.params.get("size").and_then(|v| v.as_f64()).unwrap_or(0.5) as f32;
-            let damp = fx.params.get("damp").and_then(|v| v.as_f64()).unwrap_or(0.5) as f32;
+            let size = fx
+                .params
+                .get("size")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.5) as f32;
+            let damp = fx
+                .params
+                .get("damp")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.5) as f32;
             let mix = fx.params.get("mix").and_then(|v| v.as_f64()).unwrap_or(0.2) as f32;
             effect::reverb(buf, size, damp, mix, SAMPLE_RATE);
         }
@@ -446,7 +478,10 @@ mod tests {
             .iter()
             .map(|(l, r)| l.abs().max(r.abs()))
             .fold(0.0_f32, f32::max);
-        assert!(peak > 0.1, "saw_pad should produce audible output, got {peak}");
+        assert!(
+            peak > 0.1,
+            "saw_pad should produce audible output, got {peak}"
+        );
     }
 
     #[test]
@@ -454,14 +489,18 @@ mod tests {
         // detune_cents を変えても音は出る (params 取り出し→ closure→ render の経路が落ちないこと)
         let mut s = one_note_song();
         let mut inst = Instrument::new("saw_pad");
-        inst.params.insert("detune_cents".into(), serde_json::json!(25.0));
+        inst.params
+            .insert("detune_cents".into(), serde_json::json!(25.0));
         s.tracks[0].instrument = inst;
         let buf = render_to_buffer(&s);
         let peak = buf
             .iter()
             .map(|(l, r)| l.abs().max(r.abs()))
             .fold(0.0_f32, f32::max);
-        assert!(peak > 0.1, "saw_pad with custom detune should still produce audio, got {peak}");
+        assert!(
+            peak > 0.1,
+            "saw_pad with custom detune should still produce audio, got {peak}"
+        );
     }
 
     #[test]
@@ -473,7 +512,10 @@ mod tests {
             .iter()
             .map(|(l, r)| l.abs().max(r.abs()))
             .fold(0.0_f32, f32::max);
-        assert!(peak > 0.1, "triangle should produce audible output, got {peak}");
+        assert!(
+            peak > 0.1,
+            "triangle should produce audible output, got {peak}"
+        );
     }
 
     #[test]
@@ -485,7 +527,10 @@ mod tests {
             .iter()
             .map(|(l, r)| l.abs().max(r.abs()))
             .fold(0.0_f32, f32::max);
-        assert!(peak > 0.1, "square should produce audible output, got {peak}");
+        assert!(
+            peak > 0.1,
+            "square should produce audible output, got {peak}"
+        );
     }
 
     #[test]
@@ -497,7 +542,10 @@ mod tests {
             .iter()
             .map(|(l, r)| l.abs().max(r.abs()))
             .fold(0.0_f32, f32::max);
-        assert!(peak > 0.1, "square_bass should produce audible output, got {peak}");
+        assert!(
+            peak > 0.1,
+            "square_bass should produce audible output, got {peak}"
+        );
     }
 
     #[test]
@@ -506,14 +554,18 @@ mod tests {
         // params 取り出し→ closure→ render の経路が落ちないことを確認する)
         let mut s = one_note_song();
         let mut inst = Instrument::new("square");
-        inst.params.insert("pulse_width".into(), serde_json::json!(0.2));
+        inst.params
+            .insert("pulse_width".into(), serde_json::json!(0.2));
         s.tracks[0].instrument = inst;
         let buf = render_to_buffer(&s);
         let peak = buf
             .iter()
             .map(|(l, r)| l.abs().max(r.abs()))
             .fold(0.0_f32, f32::max);
-        assert!(peak > 0.1, "narrow pulse should still produce audio, got {peak}");
+        assert!(
+            peak > 0.1,
+            "narrow pulse should still produce audio, got {peak}"
+        );
     }
 
     #[test]
@@ -525,7 +577,10 @@ mod tests {
             .iter()
             .map(|(l, r)| l.abs().max(r.abs()))
             .fold(0.0_f32, f32::max);
-        assert!(peak > 0.1, "saw_lead should produce audible output, got {peak}");
+        assert!(
+            peak > 0.1,
+            "saw_lead should produce audible output, got {peak}"
+        );
     }
 
     #[test]
@@ -580,7 +635,10 @@ mod tests {
             "lowpass should attenuate saw harmonics: dry={rms_dry} wet={rms_wet}"
         );
         // でも消えてはいない
-        assert!(rms_wet > 0.01, "lowpass should not silence the track: {rms_wet}");
+        assert!(
+            rms_wet > 0.01,
+            "lowpass should not silence the track: {rms_wet}"
+        );
     }
 
     #[test]
@@ -633,13 +691,13 @@ mod tests {
         // 1.5 秒以降のサンプル (delay echo が残る範囲) を確認
         let tail_start = (1.5 * SAMPLE_RATE as f32) as usize;
         if tail_start < buf.len() {
-            let tail_rms: f32 = (buf[tail_start..]
-                .iter()
-                .map(|(l, _)| l * l)
-                .sum::<f32>()
+            let tail_rms: f32 = (buf[tail_start..].iter().map(|(l, _)| l * l).sum::<f32>()
                 / (buf.len() - tail_start) as f32)
                 .sqrt();
-            assert!(tail_rms > 1e-4, "delay echo should leave audible tail: {tail_rms}");
+            assert!(
+                tail_rms > 1e-4,
+                "delay echo should leave audible tail: {tail_rms}"
+            );
         }
     }
 
@@ -702,13 +760,13 @@ mod tests {
         let buf = render_to_buffer(&s);
         // note.dur=0.5 beat / bpm=120 = 0.25 秒。 余韻 2 秒のうち末尾 0.5 秒に reverb tail が乗っているはず
         let tail_start = buf.len().saturating_sub(SAMPLE_RATE as usize / 2);
-        let tail_rms: f32 = (buf[tail_start..]
-            .iter()
-            .map(|(l, _)| l * l)
-            .sum::<f32>()
+        let tail_rms: f32 = (buf[tail_start..].iter().map(|(l, _)| l * l).sum::<f32>()
             / (buf.len() - tail_start) as f32)
             .sqrt();
-        assert!(tail_rms > 1e-5, "reverb tail should leave audible energy: {tail_rms}");
+        assert!(
+            tail_rms > 1e-5,
+            "reverb tail should leave audible energy: {tail_rms}"
+        );
     }
 
     #[test]
@@ -721,7 +779,10 @@ mod tests {
             .iter()
             .map(|(l, r)| l.abs().max(r.abs()))
             .fold(0.0_f32, f32::max);
-        assert!(peak > 0.1, "drum_kit kick should produce audible output, got {peak}");
+        assert!(
+            peak > 0.1,
+            "drum_kit kick should produce audible output, got {peak}"
+        );
     }
 
     #[test]
@@ -755,7 +816,10 @@ mod tests {
             .zip(buf_909.iter())
             .filter(|(a, b)| (a.0 - b.0).abs() > 0.001)
             .count();
-        assert!(diff > 100, "kit param should change kick waveform: diff={diff}");
+        assert!(
+            diff > 100,
+            "kit param should change kick waveform: diff={diff}"
+        );
     }
 
     #[test]
@@ -763,7 +827,10 @@ mod tests {
         // file が存在しなくても render は落ちず無音で済む (validate 側で報告される責務)。
         let mut s = one_note_song();
         let mut inst = Instrument::new("soundfont");
-        inst.params.insert("file".into(), serde_json::json!("/nonexistent/codetta-test/missing.sf2"));
+        inst.params.insert(
+            "file".into(),
+            serde_json::json!("/nonexistent/codetta-test/missing.sf2"),
+        );
         s.tracks[0].instrument = inst;
         let buf = render_to_buffer(&s);
         let peak = buf
@@ -790,7 +857,10 @@ mod tests {
             .iter()
             .map(|(l, r)| l.abs().max(r.abs()))
             .fold(0.0_f32, f32::max);
-        assert!(peak > 0.01, "SF2 render should produce audible output, got {peak}");
+        assert!(
+            peak > 0.01,
+            "SF2 render should produce audible output, got {peak}"
+        );
     }
 
     #[test]

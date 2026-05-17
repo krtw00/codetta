@@ -208,7 +208,14 @@ pub fn render_soundfont_track_with(
     }
     let mut events: Vec<(usize, u8, Ev)> = Vec::with_capacity(cfg.notes.len() * 2);
     for n in &cfg.notes {
-        events.push((n.start_sample, 1, Ev::On { key: n.midi_key, vel: n.velocity }));
+        events.push((
+            n.start_sample,
+            1,
+            Ev::On {
+                key: n.midi_key,
+                vel: n.velocity,
+            },
+        ));
         events.push((n.end_sample, 0, Ev::Off { key: n.midi_key }));
     }
     events.sort_by_key(|(s, ord, _)| (*s, *ord));
@@ -361,7 +368,12 @@ pub fn list_soundfont_presets(
 pub fn render_soundfont_note(
     params: &SoundFontRenderParams,
 ) -> Result<StereoBuffer, SoundFontError> {
-    let mut synth = open_synth(&params.sf2_path, params.sample_rate, params.bank, params.preset)?;
+    let mut synth = open_synth(
+        &params.sf2_path,
+        params.sample_rate,
+        params.bank,
+        params.preset,
+    )?;
     let channel: i32 = 0;
 
     let hold_samples = (params.hold_sec * params.sample_rate as f32).round() as usize;

@@ -98,11 +98,7 @@ pub fn set_instrument(
 }
 
 /// トラックのエフェクトチェーンを全置換。 戻り値: 新しい fx 数。
-pub fn set_fx(
-    song: &mut Song,
-    track_id: &str,
-    fx: Vec<Effect>,
-) -> Result<usize, CodettaError> {
+pub fn set_fx(song: &mut Song, track_id: &str, fx: Vec<Effect>) -> Result<usize, CodettaError> {
     let track = track_mut(song, track_id)?;
     track.fx = fx;
     Ok(track.fx.len())
@@ -576,12 +572,8 @@ mod tests {
     #[test]
     fn edit_notes_delete_range() {
         let mut s = make_song_with_notes();
-        let stats = edit_notes(
-            &mut s,
-            "lead",
-            &[NoteOp::DeleteRange { range: [0.5, 1.5] }],
-        )
-        .unwrap();
+        let stats =
+            edit_notes(&mut s, "lead", &[NoteOp::DeleteRange { range: [0.5, 1.5] }]).unwrap();
         // t=0.5 と t=1.0 が消える
         assert_eq!(stats.notes_affected, 2);
         assert_eq!(s.tracks[0].notes.len(), 2);

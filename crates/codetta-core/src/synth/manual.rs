@@ -18,9 +18,7 @@ struct Xorshift32 {
 
 impl Xorshift32 {
     fn new(seed: u32) -> Self {
-        Self {
-            state: seed.max(1),
-        }
+        Self { state: seed.max(1) }
     }
     fn next_u32(&mut self) -> u32 {
         let mut x = self.state;
@@ -150,7 +148,11 @@ pub fn render_voice_square(
         let naive = if phase < pw { 1.0 } else { -1.0 };
         // 立ち上がり @ phase=0 (上向きステップ) → polyblep を加算
         // 立ち下がり @ phase=pw (下向きステップ) → 位相を pw だけずらして polyblep を減算
-        let phase_at_fall = if phase >= pw { phase - pw } else { phase + 1.0 - pw };
+        let phase_at_fall = if phase >= pw {
+            phase - pw
+        } else {
+            phase + 1.0 - pw
+        };
         let y = naive + polyblep(phase, dt) - polyblep(phase_at_fall, dt);
         out.push(y * e);
         phase += dt;
@@ -497,7 +499,10 @@ mod tests {
     fn voice_ends_near_zero() {
         let v = render_voice(440.0, 0.05, AdsrParams::default());
         let last = *v.last().unwrap();
-        assert!(last.abs() < 0.02, "release tail should be near zero, got {last}");
+        assert!(
+            last.abs() < 0.02,
+            "release tail should be near zero, got {last}"
+        );
     }
 
     #[test]
@@ -527,7 +532,10 @@ mod tests {
     fn saw_voice_ends_near_zero() {
         let v = render_voice_saw(440.0, 0.05, AdsrParams::default());
         let last = *v.last().unwrap();
-        assert!(last.abs() < 0.05, "release tail should be near zero, got {last}");
+        assert!(
+            last.abs() < 0.05,
+            "release tail should be near zero, got {last}"
+        );
     }
 
     #[test]
@@ -538,7 +546,10 @@ mod tests {
         // PolyBLEP 補正後でも振幅は ±1 内 (envelope 係数 ≤ 1 を考慮)
         assert!(max <= 1.0 && min >= -1.0, "out of range: [{min}, {max}]");
         // saw は両極に振れる
-        assert!(max > 0.4 && min < -0.4, "saw should swing wide: [{min}, {max}]");
+        assert!(
+            max > 0.4 && min < -0.4,
+            "saw should swing wide: [{min}, {max}]"
+        );
     }
 
     #[test]
@@ -552,8 +563,8 @@ mod tests {
             release: 0.0,
         };
         let v = render_voice_saw(220.0, 0.05, adsr);
-        let span = v.iter().cloned().fold(0.0_f32, f32::max)
-            - v.iter().cloned().fold(0.0_f32, f32::min);
+        let span =
+            v.iter().cloned().fold(0.0_f32, f32::max) - v.iter().cloned().fold(0.0_f32, f32::min);
         assert!(span > 1.5, "saw peak-to-peak too small: {span}");
     }
 
@@ -574,7 +585,10 @@ mod tests {
     fn square_voice_ends_near_zero() {
         let v = render_voice_square(440.0, 0.05, AdsrParams::default(), 0.5);
         let last = *v.last().unwrap();
-        assert!(last.abs() < 0.05, "release tail should be near zero, got {last}");
+        assert!(
+            last.abs() < 0.05,
+            "release tail should be near zero, got {last}"
+        );
     }
 
     #[test]
@@ -583,7 +597,10 @@ mod tests {
         let max = v.iter().cloned().fold(0.0_f32, f32::max);
         let min = v.iter().cloned().fold(0.0_f32, f32::min);
         assert!(max <= 1.0 && min >= -1.0, "out of range: [{min}, {max}]");
-        assert!(max > 0.4 && min < -0.4, "square should swing both rails: [{min}, {max}]");
+        assert!(
+            max > 0.4 && min < -0.4,
+            "square should swing both rails: [{min}, {max}]"
+        );
     }
 
     #[test]
@@ -595,8 +612,8 @@ mod tests {
             release: 0.0,
         };
         let v = render_voice_square(220.0, 0.05, adsr, 0.5);
-        let span = v.iter().cloned().fold(0.0_f32, f32::max)
-            - v.iter().cloned().fold(0.0_f32, f32::min);
+        let span =
+            v.iter().cloned().fold(0.0_f32, f32::max) - v.iter().cloned().fold(0.0_f32, f32::min);
         assert!(span > 1.5, "square peak-to-peak too small: {span}");
     }
 
@@ -617,7 +634,10 @@ mod tests {
     fn triangle_voice_ends_near_zero() {
         let v = render_voice_triangle(440.0, 0.05, AdsrParams::default());
         let last = *v.last().unwrap();
-        assert!(last.abs() < 0.05, "release tail should be near zero, got {last}");
+        assert!(
+            last.abs() < 0.05,
+            "release tail should be near zero, got {last}"
+        );
     }
 
     #[test]
@@ -626,7 +646,10 @@ mod tests {
         let max = v.iter().cloned().fold(0.0_f32, f32::max);
         let min = v.iter().cloned().fold(0.0_f32, f32::min);
         assert!(max <= 1.0 && min >= -1.0, "out of range: [{min}, {max}]");
-        assert!(max > 0.4 && min < -0.4, "triangle should swing both rails: [{min}, {max}]");
+        assert!(
+            max > 0.4 && min < -0.4,
+            "triangle should swing both rails: [{min}, {max}]"
+        );
     }
 
     #[test]
@@ -638,8 +661,8 @@ mod tests {
             release: 0.0,
         };
         let v = render_voice_triangle(220.0, 0.05, adsr);
-        let span = v.iter().cloned().fold(0.0_f32, f32::max)
-            - v.iter().cloned().fold(0.0_f32, f32::min);
+        let span =
+            v.iter().cloned().fold(0.0_f32, f32::max) - v.iter().cloned().fold(0.0_f32, f32::min);
         // 解析式そのままなのでほぼ ±1 まで届く
         assert!(span > 1.8, "triangle peak-to-peak too small: {span}");
     }
@@ -661,7 +684,10 @@ mod tests {
     fn saw_pad_voice_ends_near_zero() {
         let v = render_voice_saw_pad(440.0, 0.05, AdsrParams::default(), 10.0);
         let last = *v.last().unwrap();
-        assert!(last.abs() < 0.05, "release tail should be near zero, got {last}");
+        assert!(
+            last.abs() < 0.05,
+            "release tail should be near zero, got {last}"
+        );
     }
 
     #[test]
@@ -672,7 +698,10 @@ mod tests {
         // 3 voice を 1/3 ずつ合成しているので最悪でも ±1 に収まる
         assert!(max <= 1.0 && min >= -1.0, "out of range: [{min}, {max}]");
         // detune してもメインの saw が振り切るタイミングがあるので両極に届く
-        assert!(max > 0.4 && min < -0.4, "saw_pad should swing wide: [{min}, {max}]");
+        assert!(
+            max > 0.4 && min < -0.4,
+            "saw_pad should swing wide: [{min}, {max}]"
+        );
     }
 
     #[test]
@@ -685,9 +714,12 @@ mod tests {
             release: 0.0,
         };
         let v = render_voice_saw_pad(220.0, 0.05, adsr, 100.0);
-        let span = v.iter().cloned().fold(0.0_f32, f32::max)
-            - v.iter().cloned().fold(0.0_f32, f32::min);
-        assert!(span > 1.0, "saw_pad with extreme detune should still oscillate: {span}");
+        let span =
+            v.iter().cloned().fold(0.0_f32, f32::max) - v.iter().cloned().fold(0.0_f32, f32::min);
+        assert!(
+            span > 1.0,
+            "saw_pad with extreme detune should still oscillate: {span}"
+        );
     }
 
     #[test]
@@ -704,7 +736,10 @@ mod tests {
         let saw = render_voice_saw(220.0, 0.05, adsr);
         assert_eq!(pad.len(), saw.len());
         for (p, s) in pad.iter().zip(saw.iter()) {
-            assert!((p - s).abs() < 1e-4, "expected equivalence at zero detune: {p} vs {s}");
+            assert!(
+                (p - s).abs() < 1e-4,
+                "expected equivalence at zero detune: {p} vs {s}"
+            );
         }
     }
 
@@ -754,8 +789,17 @@ mod tests {
         let a808 = render_drum_kick(Some("808"));
         let a909 = render_drum_kick(Some("909"));
         // 808 は decay 400ms で最も長く、 909 は 200ms、 default は 200ms
-        assert!(a808.len() > d.len(), "808 should be longer than default: 808={} default={}", a808.len(), d.len());
-        assert_eq!(a909.len(), d.len(), "909 and default share 200ms decay, lengths should match");
+        assert!(
+            a808.len() > d.len(),
+            "808 should be longer than default: 808={} default={}",
+            a808.len(),
+            d.len()
+        );
+        assert_eq!(
+            a909.len(),
+            d.len(),
+            "909 and default share 200ms decay, lengths should match"
+        );
     }
 
     #[test]
@@ -770,7 +814,12 @@ mod tests {
     fn drum_hh_closed_is_shorter_than_open() {
         let closed = render_drum_hh(false);
         let open = render_drum_hh(true);
-        assert!(open.len() > closed.len() * 5, "open hh should be ~10x longer than closed: closed={} open={}", closed.len(), open.len());
+        assert!(
+            open.len() > closed.len() * 5,
+            "open hh should be ~10x longer than closed: closed={} open={}",
+            closed.len(),
+            open.len()
+        );
         assert!(peak(&closed) > 0.1 && peak(&closed) <= 1.0);
         assert!(peak(&open) > 0.1 && peak(&open) <= 1.0);
     }
@@ -802,7 +851,10 @@ mod tests {
             .zip(hi.iter())
             .filter(|(a, b)| (*a - *b).abs() > 0.01)
             .count();
-        assert!(diff_lo_hi > 100, "lo and hi toms should differ: diff={diff_lo_hi}");
+        assert!(
+            diff_lo_hi > 100,
+            "lo and hi toms should differ: diff={diff_lo_hi}"
+        );
         for v in [&lo, &mid, &hi] {
             assert!(peak(v) > 0.2 && peak(v) <= 1.0);
         }
