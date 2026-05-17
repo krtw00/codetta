@@ -89,9 +89,9 @@ classDiagram
 | 音源 | 内蔵 synth (`sin` / `saw` / `saw_lead` / `square` / `square_bass` / `triangle` / `saw_pad` / `drum_kit`) + `soundfont` 並列 | **`soundfont` 一本** |
 | ドラム | `instrument.type = "drum_kit"` + 要素名キー (`kick` 等) | SF2 GM Drum (`bank: 128`) + 要素名キーは LLM フレンドリーのため維持、 内部で MIDI 番号に正規化 |
 | `metadata.master_gain` | 任意 | 任意 (互換) |
-| migrate | — | `codetta migrate` (Phase 2 で追加予定) が 0.1 → 0.2 を自動変換 (instrument → 該当 GM preset への置換) |
+| migrate | — | `codetta migrate` (CDT-6 実装済) が 0.1 → 0.2 を自動変換 (instrument → 該当 GM preset への置換) |
 
-新規プロジェクトは必ず `"0.2"` で書く。 0.1 ファイルは load 時に migrate を促す warning を出す方針 (Phase 2 で確定)。
+新規プロジェクトは必ず `"0.2"` で書く。 0.1 ファイルは `io::load` で **`UnknownVersion` error として reject** される (= `SUPPORTED_VERSIONS = ["0.2"]`)。 0.1 を読みたい場合は事前に `codetta migrate <input.codetta> -o <output.codetta>` で 0.2 化する (CDT-6 / CDT-7)。 「load 時に warning」 案は CDT-7 で不採用に確定 (= migrate 経路と矛盾するため reject 一本化)。
 
 ## メタデータ (`metadata`)
 
@@ -175,7 +175,7 @@ classDiagram
 
 ドラムキットの音色実体は SF2 ファイル側にある (= GeneralUser GS なら preset 0/bank 128 が「Standard Drum Kit」)。 SF2 を差し替えれば別のドラム音色 (Jazz / Power / Electronic 等) に切替えできる。
 
-実装注: ドラム要素名キー (`kick` 等) → GM MIDI 番号への正規化は **Phase 2 で SF2 経路に追加実装が必要**。 Phase 1+ 時点 (= `SCHEMA_VERSION = "0.1"`) では内蔵 `drum_kit` instrument 経路でのみ機能する。 schema 0.2 化で内蔵 `drum_kit` を削除する際に、 SF2 bank 128 track での drum key 解釈を render / validate 両方に組み込む。
+実装注: ドラム要素名キー (`kick` 等) → GM MIDI 番号への正規化は **CDT-5 で実装済** (= `synth::soundfont::DRUM_KEY_MIDI_MAP` が正本、 `render` / `validate` 両方から参照)。 SF2 bank 128 track 上で要素名キー / MIDI 番号 / ノート名表記のいずれも受け付ける。 旧 0.1 の内蔵 `drum_kit` 経路は CDT-7 で削除済 (= `migrate` 経由で SF2 GM Standard Drum Kit に置換される)。
 
 ## 楽器 (`instrument`)
 
@@ -333,7 +333,7 @@ Phase 4 で配布バイナリに同梱予定の `GeneralUser-GS.sf2` (約 30MB) 
 
 CLI / Core は以下を検証する:
 
-- `version` が既知のバージョン (= `"0.2"` 現行、 `"0.1"` は legacy 警告)
+- `version` が既知のバージョン (= `"0.2"` のみ。 `"0.1"` は `io::load` 時点で `UnknownVersion` error として reject、 事前に `codetta migrate` で 0.2 化が必要)
 - `metadata.bpm` が 20-300 の範囲
 - `metadata.master_gain` が 0.0-4.0 の範囲 (省略時 1.0)
 - `metadata.time_signature` の分母が 2 の累乗
@@ -342,7 +342,7 @@ CLI / Core は以下を検証する:
 - `notes[].dur` が `> 0`
 - `notes[].vel` が `0-127` の範囲
 - `notes[].pitch` が解釈可能 (ノート名 / MIDI 番号 / ドラムキー)
-- `instrument.type` が `"soundfont"` (それ以外は 0.2 で reject、 0.1 では legacy 警告)
+- `instrument.type` が `"soundfont"` (それ以外は 0.2 では `UNKNOWN_INSTRUMENT_TYPE` で reject。 0.1 は load 時点で reject されるためここまで来ない)
 - `instrument.params.file` の SF2 ファイルが path 解決で見つかる (`SOUNDFONT_FILE_NOT_FOUND`)
 - `instrument.params.preset` / `bank` が範囲内
 - `fx[].type` が既知の type
@@ -365,7 +365,6 @@ CLI / Core は以下を検証する:
 
 ## オープンクエスチョン
 
-- [ ] `codetta migrate` の挙動: 0.1 → 0.2 の instrument マッピング (例: `saw_lead` → preset 81、 `drum_kit/808` → preset 0/bank 128) は LUT で固定するか、 `--manual` で都度確認させるか
 - [ ] JSON Schema 公開先 URL (`https://codetta.dev/schemas/song/0.2`) → Phase 4 で確定
 - [ ] エフェクト send/return (Phase 5+) のスキーマ
 
@@ -376,6 +375,8 @@ CLI / Core は以下を検証する:
 - [x] note の `pitch` 表現で `"C4"` と `60` をどちらをデフォルトにするか → **ノート名 (`"C4"`) を推奨、 両方受け付け**
 - [x] 音源は内蔵 synth か外付け SF2 か → **外付け SF2 一本化** (= schema 0.2)
 - [x] ドラムを内蔵 `drum_kit` で持つか SF2 GM Drum で解決するか → **SF2 GM Drum (bank 128)**、 ただし要素名キー (kick/snare 等) は LLM フレンドリーのため維持
+- [x] `codetta migrate` の挙動: 0.1 → 0.2 の instrument マッピング を LUT で固定するか、 `--manual` で都度確認させるか → **CDT-6 で LUT 固定 + 未掲載 type は preset 0 fallback + warning。 `--manual` 不採用** (= MCP 駆動と整合しないため、 後段 `set-instrument` で個別調整が代替手段)
+- [x] 0.1 ファイルを `io::load` でどう扱うか (= warning or reject) → **CDT-7 で reject 一本化** (`UnknownVersion` error)。 migrate.rs は raw JSON 経路で 0.1 を受け続けるので migration 経路は維持される
 
 ## 関連ドキュメント
 

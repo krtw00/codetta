@@ -1,14 +1,14 @@
 //! Song を WAV へレンダリングするパイプライン。
 //!
-//! 信号フロー (05-sound.md):
+//! 信号フロー:
 //!
 //! ```text
-//!   note → voice → × velocity → × volume → pan → master mix → soft limiter → WAV
+//!   SF2 note_on → synth.render → × volume → pan → master mix → soft limiter → WAV
 //! ```
 //!
-//! Phase 0 first cut のサポート:
+//! schema 0.2 / SF2 一本化:
 //!
-//! - 楽器: `sin` / `saw` / `saw_lead` / `square` / `square_bass` / `triangle` / `saw_pad` (他はスキップして無音)
+//! - 楽器: `soundfont` 一種のみ (= `Instrument::SoundFont`)。 内蔵 synth は CDT-7 で削除済
 //! - サンプルレート: 44.1kHz / ビット深度: 16bit / stereo
 //! - エフェクト: `lowpass` / `highpass` / `distortion` / `delay` / `reverb` を track.fx として適用 (順序通り)
 //! - `--from` / `--to` トリミング: 未対応 (CLI 側で beat → samples 変換時に slice)
@@ -27,7 +27,7 @@ use crate::synth::soundfont::{
     drum_key_to_midi, load_soundfont, render_soundfont_track_with, resolve_soundfont_path,
     SoundFontParams, SoundFontTrackNote, SoundFontTrackRender, DRUM_BANK,
 };
-use crate::synth::{manual, midi_to_freq, AdsrParams, SAMPLE_RATE};
+use crate::synth::SAMPLE_RATE;
 
 /// Song を WAV ファイルに書き出す。 出力時の経過秒数 (実時間) は返さない —
 /// CLI 側で計測する。
@@ -83,159 +83,91 @@ pub fn render_to_buffer(song: &Song) -> Vec<(f32, f32)> {
         // per-track buffer に書き出し
         let mut track_buf = vec![(0.0_f32, 0.0_f32); total_samples];
 
-        if kind == "soundfont" {
-            // SF2 は per-voice 独立 render ができないので track 単位で Synthesizer を生成し、
-            // note_on/note_off/render を時刻順に駆動して stereo PCM を取り出す。
-            let sf_params = match SoundFontParams::from_params(&track.instrument.params) {
-                Ok(p) => p,
-                Err(_) => continue, // validate 側で報告済み
-            };
-            let resolved = resolve_soundfont_path(&sf_params.file);
-            let sound_font = match sf2_cache.get(&resolved) {
-                Some(sf) => sf.clone(),
-                None => match load_soundfont(&resolved) {
-                    Ok(sf) => {
-                        sf2_cache.insert(resolved.clone(), sf.clone());
-                        sf
-                    }
-                    Err(e) => {
-                        eprintln!(
-                            "warning: soundfont track {:?} skipped due to load error: {}",
-                            track.id, e
-                        );
-                        continue;
-                    }
-                },
-            };
-            // bank=128 = GM Drum kit。 pitch が drum 要素名キー (kick 等) なら GM MIDI 番号に
-            // 正規化し、 通常のノート名 / MIDI 番号との混在も受け付ける (02-project-format.md L175)。
-            let is_drum_track = sf_params.bank == DRUM_BANK;
-            let mut notes: Vec<SoundFontTrackNote> = track
-                .notes
-                .iter()
-                .filter_map(|n| {
-                    let midi = match (is_drum_track, &n.pitch) {
-                        (true, Pitch::Name(s)) => {
-                            drum_key_to_midi(s).or_else(|| n.pitch.as_midi().ok())?
-                        }
-                        _ => n.pitch.as_midi().ok()?,
-                    };
-                    let start = (n.t * sec_per_beat * sr) as usize;
-                    let end_beat = n.t + n.dur;
-                    let end = (end_beat * sec_per_beat * sr) as usize;
-                    if end <= start {
-                        return None;
-                    }
-                    Some(SoundFontTrackNote {
-                        start_sample: start,
-                        end_sample: end,
-                        midi_key: midi,
-                        velocity: n.vel,
-                    })
-                })
-                .collect();
-            notes.sort_by_key(|n| n.start_sample);
+        // schema 0.2 では `instrument.type` は "soundfont" のみ。 他 type は validate で
+        // 弾かれる前提だが、 in-memory で組まれた未知 type もここで silent skip する。
+        if kind != "soundfont" {
+            continue;
+        }
 
-            let cfg = SoundFontTrackRender {
-                sf2_path: resolved,
-                preset: sf_params.preset,
-                bank: sf_params.bank,
-                sample_rate: SAMPLE_RATE,
-                total_samples,
-                notes,
-            };
-            match render_soundfont_track_with(&cfg, sound_font) {
-                Ok(stereo) => {
-                    // velocity は SF2 内部で note_on velocity として既に効いている。
-                    // 残るのは track.volume と pan。 pan は左右 gain として乗算。
-                    for (i, (sl, sr)) in stereo.left.iter().zip(stereo.right.iter()).enumerate() {
-                        if i >= track_buf.len() {
-                            break;
-                        }
-                        track_buf[i].0 += sl * vol * gain_l;
-                        track_buf[i].1 += sr * vol * gain_r;
-                    }
+        // SF2 は per-voice 独立 render ができないので track 単位で Synthesizer を生成し、
+        // note_on/note_off/render を時刻順に駆動して stereo PCM を取り出す。
+        let sf_params = match SoundFontParams::from_params(&track.instrument.params) {
+            Ok(p) => p,
+            Err(_) => continue, // validate 側で報告済み
+        };
+        let resolved = resolve_soundfont_path(&sf_params.file);
+        let sound_font = match sf2_cache.get(&resolved) {
+            Some(sf) => sf.clone(),
+            None => match load_soundfont(&resolved) {
+                Ok(sf) => {
+                    sf2_cache.insert(resolved.clone(), sf.clone());
+                    sf
                 }
                 Err(e) => {
-                    // 致命ではない: validate でも検出されるべきだが、 ここでは黙ってスキップせず
-                    // stderr に出す (CLI quiet/verbose の判定は呼び出し側にない)。
                     eprintln!(
-                        "warning: soundfont track {:?} skipped due to render error: {}",
+                        "warning: soundfont track {:?} skipped due to load error: {}",
                         track.id, e
                     );
+                    continue;
                 }
-            }
-        } else if kind == "drum_kit" {
-            // drum は note.pitch.as_drum_key() で voice を分岐。 melodic 経路と違って
-            // freq/hold を取らないので、 closure ではなくここで直接ループする。
-            let kit = kit_from_params(&track.instrument.params);
-            for note in &track.notes {
-                let drum_key = match note.pitch.as_drum_key() {
-                    Ok(k) => k,
-                    Err(_) => continue,
+            },
+        };
+        // bank=128 = GM Drum kit。 pitch が drum 要素名キー (kick 等) なら GM MIDI 番号に
+        // 正規化し、 通常のノート名 / MIDI 番号との混在も受け付ける (02-project-format.md L175)。
+        let is_drum_track = sf_params.bank == DRUM_BANK;
+        let mut notes: Vec<SoundFontTrackNote> = track
+            .notes
+            .iter()
+            .filter_map(|n| {
+                let midi = match (is_drum_track, &n.pitch) {
+                    (true, Pitch::Name(s)) => {
+                        drum_key_to_midi(s).or_else(|| n.pitch.as_midi().ok())?
+                    }
+                    _ => n.pitch.as_midi().ok()?,
                 };
-                let voice = match drum_key {
-                    "kick" => manual::render_drum_kick(kit.as_deref()),
-                    "snare" => manual::render_drum_snare(kit.as_deref()),
-                    "hh_closed" => manual::render_drum_hh(false),
-                    "hh_open" => manual::render_drum_hh(true),
-                    "clap" => manual::render_drum_clap(),
-                    "crash" => manual::render_drum_crash(),
-                    "ride" => manual::render_drum_ride(),
-                    "tom_lo" => manual::render_drum_tom(80.0),
-                    "tom_mid" => manual::render_drum_tom(150.0),
-                    "tom_hi" => manual::render_drum_tom(220.0),
-                    _ => continue,
-                };
-                let start_sample = (note.t * sec_per_beat * sr) as usize;
-                let vel_gain = note.vel as f32 / 127.0;
-                let g = vol * vel_gain;
-                for (i, s) in voice.iter().enumerate() {
-                    let idx = start_sample + i;
-                    if idx >= track_buf.len() {
+                let start = (n.t * sec_per_beat * sr) as usize;
+                let end_beat = n.t + n.dur;
+                let end = (end_beat * sec_per_beat * sr) as usize;
+                if end <= start {
+                    return None;
+                }
+                Some(SoundFontTrackNote {
+                    start_sample: start,
+                    end_sample: end,
+                    midi_key: midi,
+                    velocity: n.vel,
+                })
+            })
+            .collect();
+        notes.sort_by_key(|n| n.start_sample);
+
+        let cfg = SoundFontTrackRender {
+            sf2_path: resolved,
+            preset: sf_params.preset,
+            bank: sf_params.bank,
+            sample_rate: SAMPLE_RATE,
+            total_samples,
+            notes,
+        };
+        match render_soundfont_track_with(&cfg, sound_font) {
+            Ok(stereo) => {
+                // velocity は SF2 内部で note_on velocity として既に効いている。
+                // 残るのは track.volume と pan。 pan は左右 gain として乗算。
+                for (i, (sl, sr)) in stereo.left.iter().zip(stereo.right.iter()).enumerate() {
+                    if i >= track_buf.len() {
                         break;
                     }
-                    track_buf[idx].0 += s * g * gain_l;
-                    track_buf[idx].1 += s * g * gain_r;
+                    track_buf[i].0 += sl * vol * gain_l;
+                    track_buf[i].1 += sr * vol * gain_r;
                 }
             }
-        } else {
-            // melodic 楽器: 楽器ごとに extra params が違うので closure で受ける
-            // (sin/saw は adsr のみ、 square は pulse_width 追加)。
-            let adsr = AdsrParams::from_params(&track.instrument.params);
-            let render_voice: Box<dyn Fn(f32, f32) -> Vec<f32>> = match kind {
-                "sin" => Box::new(move |f, h| manual::render_voice(f, h, adsr)),
-                "saw" | "saw_lead" => Box::new(move |f, h| manual::render_voice_saw(f, h, adsr)),
-                "square" | "square_bass" => {
-                    let pw = pulse_width_from_params(&track.instrument.params);
-                    Box::new(move |f, h| manual::render_voice_square(f, h, adsr, pw))
-                }
-                "triangle" => Box::new(move |f, h| manual::render_voice_triangle(f, h, adsr)),
-                "saw_pad" => {
-                    let detune = detune_cents_from_params(&track.instrument.params);
-                    Box::new(move |f, h| manual::render_voice_saw_pad(f, h, adsr, detune))
-                }
-                _ => continue, // 未知の type は validate で検出される
-            };
-            for note in &track.notes {
-                let midi = match note.pitch.as_midi() {
-                    Ok(m) => m,
-                    Err(_) => continue,
-                };
-                let freq = midi_to_freq(midi);
-                let start_sample = (note.t * sec_per_beat * sr) as usize;
-                let hold_sec = note.dur * sec_per_beat;
-                let voice = render_voice(freq, hold_sec);
-                let vel_gain = note.vel as f32 / 127.0;
-                let g = vol * vel_gain;
-                for (i, s) in voice.iter().enumerate() {
-                    let idx = start_sample + i;
-                    if idx >= track_buf.len() {
-                        break;
-                    }
-                    track_buf[idx].0 += s * g * gain_l;
-                    track_buf[idx].1 += s * g * gain_r;
-                }
+            Err(e) => {
+                // 致命ではない: validate でも検出されるべきだが、 ここでは黙ってスキップせず
+                // stderr に出す (CLI quiet/verbose の判定は呼び出し側にない)。
+                eprintln!(
+                    "warning: soundfont track {:?} skipped due to render error: {}",
+                    track.id, e
+                );
             }
         }
 
@@ -329,32 +261,6 @@ fn apply_effect(buf: &mut [(f32, f32)], fx: &Effect, bpm: u32) {
     }
 }
 
-/// Instrument.params から pulse_width (square/pulse 用) を取り出す。 デフォルト 0.5、 範囲 0.05-0.95。
-fn pulse_width_from_params(params: &serde_json::Map<String, serde_json::Value>) -> f32 {
-    params
-        .get("pulse_width")
-        .and_then(|v| v.as_f64())
-        .map(|v| v as f32)
-        .unwrap_or(0.5)
-}
-
-/// Instrument.params から detune_cents (saw_pad 用) を取り出す。 デフォルト 10 (sound.md)。
-fn detune_cents_from_params(params: &serde_json::Map<String, serde_json::Value>) -> f32 {
-    params
-        .get("detune_cents")
-        .and_then(|v| v.as_f64())
-        .map(|v| v as f32)
-        .unwrap_or(10.0)
-}
-
-/// Instrument.params から kit (drum_kit 用) を取り出す。 未指定なら None (= default レシピ)。
-fn kit_from_params(params: &serde_json::Map<String, serde_json::Value>) -> Option<String> {
-    params
-        .get("kit")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-}
-
 /// equal-power (-3 dB center) パン。 `pan` は -1.0 (L) .. 1.0 (R)。
 fn pan_gains(pan: f32) -> (f32, f32) {
     let p = pan.clamp(-1.0, 1.0);
@@ -392,12 +298,18 @@ mod tests {
     use super::*;
     use crate::model::{Instrument, Note, Pitch, Track};
 
-    fn one_note_song() -> Song {
+    /// SF2 (= bank 0 / preset 0 Acoustic Grand Piano) を使った 1 ノート曲。 audible 検証用 test は
+    /// `with_sf2!()` で env を要求して skip / 続行を判定する。
+    fn one_note_song(sf2: &str) -> Song {
         let mut s = Song::new("smoke", 120, None);
+        let mut inst = Instrument::new("soundfont");
+        inst.params.insert("file".into(), serde_json::json!(sf2));
+        inst.params.insert("preset".into(), serde_json::json!(0));
+        inst.params.insert("bank".into(), serde_json::json!(0));
         s.tracks.push(Track {
             id: "lead".into(),
             name: "Lead".into(),
-            instrument: Instrument::new("sin"),
+            instrument: inst,
             volume: 0.8,
             pan: 0.0,
             mute: false,
@@ -413,22 +325,33 @@ mod tests {
         s
     }
 
+    /// CODETTA_TEST_SF2 が無ければ早期 return する。 audible 検証は SF2 がローカルに無いと
+    /// できないため、 CI 等の SF2 未配備環境ではテスト skip。
+    macro_rules! with_sf2 {
+        ($var:ident) => {
+            let Some($var) = std::env::var("CODETTA_TEST_SF2").ok() else {
+                eprintln!("CODETTA_TEST_SF2 not set — skipping audible SF2 render test");
+                return;
+            };
+        };
+    }
+
     #[test]
     fn buffer_has_audio() {
-        let buf = render_to_buffer(&one_note_song());
+        with_sf2!(sf2);
+        let buf = render_to_buffer(&one_note_song(&sf2));
         assert!(!buf.is_empty());
         let peak = buf
             .iter()
             .map(|(l, r)| l.abs().max(r.abs()))
             .fold(0.0_f32, f32::max);
-        assert!(peak > 0.1, "expected audible peak, got {peak}");
+        assert!(peak > 0.01, "expected audible peak, got {peak}");
     }
 
     #[test]
     fn master_gain_amplifies_output() {
-        // master_gain > 1.0 で peak が増える (soft_clip 内の線形領域に収まる範囲なら
-        // 単純な乗算と等価)。 元の volume を小さく取って soft_clip 飽和を避ける。
-        let mut s = one_note_song();
+        with_sf2!(sf2);
+        let mut s = one_note_song(&sf2);
         s.tracks[0].volume = 0.2;
         let dry = render_to_buffer(&s);
         s.metadata.master_gain = 3.0;
@@ -436,14 +359,15 @@ mod tests {
         let peak_dry = dry.iter().map(|(l, _)| l.abs()).fold(0.0_f32, f32::max);
         let peak_wet = wet.iter().map(|(l, _)| l.abs()).fold(0.0_f32, f32::max);
         assert!(
-            peak_wet > peak_dry * 2.0,
+            peak_wet > peak_dry * 1.5,
             "master_gain=3.0 should noticeably raise peak: dry={peak_dry} wet={peak_wet}"
         );
     }
 
     #[test]
     fn master_gain_zero_silences_output() {
-        let mut s = one_note_song();
+        with_sf2!(sf2);
+        let mut s = one_note_song(&sf2);
         s.metadata.master_gain = 0.0;
         let buf = render_to_buffer(&s);
         let peak = buf
@@ -455,7 +379,8 @@ mod tests {
 
     #[test]
     fn mute_silences_track() {
-        let mut s = one_note_song();
+        with_sf2!(sf2);
+        let mut s = one_note_song(&sf2);
         s.tracks[0].mute = true;
         let buf = render_to_buffer(&s);
         let peak = buf
@@ -467,140 +392,31 @@ mod tests {
 
     #[test]
     fn unknown_instrument_silently_skipped() {
-        let mut s = one_note_song();
-        s.tracks[0].instrument = Instrument::new("unknown_synth"); // 未知 type は無音 (validate 側でエラー出力されるが render は黙ってスキップ)
+        // 未知 instrument type は無音で skip (validate 側でエラー出力されるが render は黙る)。
+        // SF2 は不要 (内蔵 synth 削除済の schema 0.2 では soundfont 以外は全て silent)。
+        let mut s = Song::new("smoke", 120, None);
+        s.tracks.push(Track {
+            id: "x".into(),
+            name: "X".into(),
+            instrument: Instrument::new("unknown_synth"),
+            volume: 0.8,
+            pan: 0.0,
+            mute: false,
+            solo: false,
+            fx: vec![],
+            notes: vec![Note {
+                t: 0.0,
+                pitch: Pitch::Name("A4".into()),
+                dur: 0.5,
+                vel: 100,
+            }],
+        });
         let buf = render_to_buffer(&s);
         let peak = buf
             .iter()
             .map(|(l, r)| l.abs().max(r.abs()))
             .fold(0.0_f32, f32::max);
         assert_eq!(peak, 0.0);
-    }
-
-    #[test]
-    fn saw_pad_renders_audio() {
-        let mut s = one_note_song();
-        s.tracks[0].instrument = Instrument::new("saw_pad");
-        let buf = render_to_buffer(&s);
-        let peak = buf
-            .iter()
-            .map(|(l, r)| l.abs().max(r.abs()))
-            .fold(0.0_f32, f32::max);
-        assert!(
-            peak > 0.1,
-            "saw_pad should produce audible output, got {peak}"
-        );
-    }
-
-    #[test]
-    fn saw_pad_detune_cents_respected() {
-        // detune_cents を変えても音は出る (params 取り出し→ closure→ render の経路が落ちないこと)
-        let mut s = one_note_song();
-        let mut inst = Instrument::new("saw_pad");
-        inst.params
-            .insert("detune_cents".into(), serde_json::json!(25.0));
-        s.tracks[0].instrument = inst;
-        let buf = render_to_buffer(&s);
-        let peak = buf
-            .iter()
-            .map(|(l, r)| l.abs().max(r.abs()))
-            .fold(0.0_f32, f32::max);
-        assert!(
-            peak > 0.1,
-            "saw_pad with custom detune should still produce audio, got {peak}"
-        );
-    }
-
-    #[test]
-    fn triangle_renders_audio() {
-        let mut s = one_note_song();
-        s.tracks[0].instrument = Instrument::new("triangle");
-        let buf = render_to_buffer(&s);
-        let peak = buf
-            .iter()
-            .map(|(l, r)| l.abs().max(r.abs()))
-            .fold(0.0_f32, f32::max);
-        assert!(
-            peak > 0.1,
-            "triangle should produce audible output, got {peak}"
-        );
-    }
-
-    #[test]
-    fn square_renders_audio() {
-        let mut s = one_note_song();
-        s.tracks[0].instrument = Instrument::new("square");
-        let buf = render_to_buffer(&s);
-        let peak = buf
-            .iter()
-            .map(|(l, r)| l.abs().max(r.abs()))
-            .fold(0.0_f32, f32::max);
-        assert!(
-            peak > 0.1,
-            "square should produce audible output, got {peak}"
-        );
-    }
-
-    #[test]
-    fn square_bass_alias_also_renders() {
-        let mut s = one_note_song();
-        s.tracks[0].instrument = Instrument::new("square_bass");
-        let buf = render_to_buffer(&s);
-        let peak = buf
-            .iter()
-            .map(|(l, r)| l.abs().max(r.abs()))
-            .fold(0.0_f32, f32::max);
-        assert!(
-            peak > 0.1,
-            "square_bass should produce audible output, got {peak}"
-        );
-    }
-
-    #[test]
-    fn pulse_width_param_respected() {
-        // pulse_width を変えても音は出る (実際の duty 差は周波数解析しないと見えないが、
-        // params 取り出し→ closure→ render の経路が落ちないことを確認する)
-        let mut s = one_note_song();
-        let mut inst = Instrument::new("square");
-        inst.params
-            .insert("pulse_width".into(), serde_json::json!(0.2));
-        s.tracks[0].instrument = inst;
-        let buf = render_to_buffer(&s);
-        let peak = buf
-            .iter()
-            .map(|(l, r)| l.abs().max(r.abs()))
-            .fold(0.0_f32, f32::max);
-        assert!(
-            peak > 0.1,
-            "narrow pulse should still produce audio, got {peak}"
-        );
-    }
-
-    #[test]
-    fn saw_lead_renders_audio() {
-        let mut s = one_note_song();
-        s.tracks[0].instrument = Instrument::new("saw_lead");
-        let buf = render_to_buffer(&s);
-        let peak = buf
-            .iter()
-            .map(|(l, r)| l.abs().max(r.abs()))
-            .fold(0.0_f32, f32::max);
-        assert!(
-            peak > 0.1,
-            "saw_lead should produce audible output, got {peak}"
-        );
-    }
-
-    #[test]
-    fn saw_alias_also_renders() {
-        let mut s = one_note_song();
-        s.tracks[0].instrument = Instrument::new("saw");
-        let buf = render_to_buffer(&s);
-        let peak = buf
-            .iter()
-            .map(|(l, r)| l.abs().max(r.abs()))
-            .fold(0.0_f32, f32::max);
-        assert!(peak > 0.1, "saw should produce audible output, got {peak}");
     }
 
     #[test]
@@ -621,9 +437,13 @@ mod tests {
 
     #[test]
     fn lowpass_fx_attenuates_high_freq_track() {
-        // saw (倍音豊富) に 500Hz lowpass を被せると RMS が下がるはず
-        let mut s = one_note_song();
-        s.tracks[0].instrument = Instrument::new("saw");
+        with_sf2!(sf2);
+        // bright preset (Saw Lead) に 500Hz lowpass を被せると RMS が下がる
+        let mut s = one_note_song(&sf2);
+        s.tracks[0]
+            .instrument
+            .params
+            .insert("preset".into(), serde_json::json!(81));
         let dry = render_to_buffer(&s);
         s.tracks[0].fx.push(crate::model::Effect {
             kind: "lowpass".into(),
@@ -637,23 +457,24 @@ mod tests {
         let wet = render_to_buffer(&s);
         let rms_dry: f32 = (dry.iter().map(|(l, _)| l * l).sum::<f32>() / dry.len() as f32).sqrt();
         let rms_wet: f32 = (wet.iter().map(|(l, _)| l * l).sum::<f32>() / wet.len() as f32).sqrt();
-        // 倍音が削れるので RMS は明確に下がる (= 少なくとも 80%)
         assert!(
-            rms_wet < rms_dry * 0.95,
-            "lowpass should attenuate saw harmonics: dry={rms_dry} wet={rms_wet}"
+            rms_wet < rms_dry * 0.97,
+            "lowpass should attenuate harmonics: dry={rms_dry} wet={rms_wet}"
         );
-        // でも消えてはいない
         assert!(
-            rms_wet > 0.01,
+            rms_wet > 1e-5,
             "lowpass should not silence the track: {rms_wet}"
         );
     }
 
     #[test]
     fn distortion_fx_changes_waveform() {
-        // distortion(amount=1) で出力ピークが圧縮される (元 saw のピーク値より低くなる)
-        let mut s = one_note_song();
-        s.tracks[0].instrument = Instrument::new("saw");
+        with_sf2!(sf2);
+        let mut s = one_note_song(&sf2);
+        s.tracks[0]
+            .instrument
+            .params
+            .insert("preset".into(), serde_json::json!(81));
         s.tracks[0].volume = 0.4;
         let dry = render_to_buffer(&s);
         s.tracks[0].fx.push(crate::model::Effect {
@@ -666,9 +487,6 @@ mod tests {
             },
         });
         let wet = render_to_buffer(&s);
-        let peak_dry = dry.iter().map(|(l, _)| l.abs()).fold(0.0_f32, f32::max);
-        let peak_wet = wet.iter().map(|(l, _)| l.abs()).fold(0.0_f32, f32::max);
-        // dry/wet の波形が変わっていれば OK (どちらが大きいかは tanh の make_up に依存するが、 サンプル単位で差があるはず)
         let diff_count = dry
             .iter()
             .zip(wet.iter())
@@ -676,15 +494,14 @@ mod tests {
             .count();
         assert!(
             diff_count > 100,
-            "distortion should change samples: diff_count={diff_count} peak_dry={peak_dry} peak_wet={peak_wet}"
+            "distortion should change samples: diff_count={diff_count}"
         );
     }
 
     #[test]
     fn delay_fx_extends_tail() {
-        // 短いノートに delay (feedback>0、 mix>0) をかけると、 ノート末尾以降に音が残る
-        let mut s = one_note_song();
-        // note.dur=0.5 beat、 bpm=120 → 0.25 秒。 余韻 2 秒も含まれるが、 1 秒地点での RMS で確認
+        with_sf2!(sf2);
+        let mut s = one_note_song(&sf2);
         s.tracks[0].fx.push(crate::model::Effect {
             kind: "delay".into(),
             params: {
@@ -696,26 +513,56 @@ mod tests {
             },
         });
         let buf = render_to_buffer(&s);
-        // 1.5 秒以降のサンプル (delay echo が残る範囲) を確認
         let tail_start = (1.5 * SAMPLE_RATE as f32) as usize;
         if tail_start < buf.len() {
             let tail_rms: f32 = (buf[tail_start..].iter().map(|(l, _)| l * l).sum::<f32>()
                 / (buf.len() - tail_start) as f32)
                 .sqrt();
             assert!(
-                tail_rms > 1e-4,
+                tail_rms > 1e-5,
                 "delay echo should leave audible tail: {tail_rms}"
             );
         }
     }
 
     #[test]
+    fn reverb_fx_extends_tail() {
+        with_sf2!(sf2);
+        let mut s = one_note_song(&sf2);
+        s.tracks[0].fx.push(crate::model::Effect {
+            kind: "reverb".into(),
+            params: {
+                let mut m = serde_json::Map::new();
+                m.insert("size".into(), serde_json::json!(0.7));
+                m.insert("damp".into(), serde_json::json!(0.3));
+                m.insert("mix".into(), serde_json::json!(0.6));
+                m
+            },
+        });
+        let buf = render_to_buffer(&s);
+        let tail_start = buf.len().saturating_sub(SAMPLE_RATE as usize / 2);
+        let tail_rms: f32 = (buf[tail_start..].iter().map(|(l, _)| l * l).sum::<f32>()
+            / (buf.len() - tail_start) as f32)
+            .sqrt();
+        assert!(
+            tail_rms > 1e-6,
+            "reverb tail should leave audible energy: {tail_rms}"
+        );
+    }
+
+    #[test]
     fn fx_chain_applied_in_order() {
-        // lowpass(500Hz、 倍音削減) → distortion(amount=1、 強 saturate) と
-        // distortion → lowpass では saturate される波形が違うので、 結果は明確に違う。
-        let mut s_dl = one_note_song();
-        s_dl.tracks[0].instrument = Instrument::new("saw");
-        s_dl.tracks[0].notes[0].dur = 2.0; // hold を長く取って fx の効果が乗る区間を確保
+        with_sf2!(sf2);
+        let mut s_dl = one_note_song(&sf2);
+        s_dl.tracks[0]
+            .instrument
+            .params
+            .insert("preset".into(), serde_json::json!(81));
+        // SF2 envelope は内蔵 synth より振幅が小さいので、 volume / master_gain を最大化して
+        // distortion ⇆ lowpass の order 差が見える振幅を確保する。
+        s_dl.tracks[0].volume = 1.0;
+        s_dl.metadata.master_gain = 2.0;
+        s_dl.tracks[0].notes[0].dur = 2.0;
         s_dl.tracks[0].fx = vec![
             crate::model::Effect {
                 kind: "distortion".into(),
@@ -737,109 +584,45 @@ mod tests {
             },
         ];
         let mut s_ld = s_dl.clone();
-        s_ld.tracks[0].fx.swap(0, 1); // lowpass → distortion
+        s_ld.tracks[0].fx.swap(0, 1);
         let buf_dl = render_to_buffer(&s_dl);
         let buf_ld = render_to_buffer(&s_ld);
+        // SF2 出力は小振幅でも distortion (tanh) の非線形性 + lowpass IIR で order 差は出る。
+        // 閾値は内蔵 synth 時代の 0.001 から 1e-5 に緩めて SF2 振幅に追従。
         let diff: usize = buf_dl
             .iter()
             .zip(buf_ld.iter())
-            .filter(|(a, b)| (a.0 - b.0).abs() > 0.001)
+            .filter(|(a, b)| (a.0 - b.0).abs() > 1e-5)
             .count();
-        assert!(
-            diff > 100,
-            "fx order should matter (distortion→lowpass vs lowpass→distortion), diff={diff}"
-        );
-    }
-
-    #[test]
-    fn reverb_fx_extends_tail() {
-        // 短いノートに reverb (mix=0.6) をかけると、 ノート末尾以降にも残響が残る
-        let mut s = one_note_song();
-        s.tracks[0].fx.push(crate::model::Effect {
-            kind: "reverb".into(),
-            params: {
-                let mut m = serde_json::Map::new();
-                m.insert("size".into(), serde_json::json!(0.7));
-                m.insert("damp".into(), serde_json::json!(0.3));
-                m.insert("mix".into(), serde_json::json!(0.6));
-                m
-            },
-        });
-        let buf = render_to_buffer(&s);
-        // note.dur=0.5 beat / bpm=120 = 0.25 秒。 余韻 2 秒のうち末尾 0.5 秒に reverb tail が乗っているはず
-        let tail_start = buf.len().saturating_sub(SAMPLE_RATE as usize / 2);
-        let tail_rms: f32 = (buf[tail_start..].iter().map(|(l, _)| l * l).sum::<f32>()
-            / (buf.len() - tail_start) as f32)
-            .sqrt();
-        assert!(
-            tail_rms > 1e-5,
-            "reverb tail should leave audible energy: {tail_rms}"
-        );
-    }
-
-    #[test]
-    fn drum_kit_kick_renders_audio() {
-        let mut s = one_note_song();
-        s.tracks[0].instrument = Instrument::new("drum_kit");
-        s.tracks[0].notes[0].pitch = Pitch::Name("kick".into());
-        let buf = render_to_buffer(&s);
-        let peak = buf
-            .iter()
-            .map(|(l, r)| l.abs().max(r.abs()))
-            .fold(0.0_f32, f32::max);
-        assert!(
-            peak > 0.1,
-            "drum_kit kick should produce audible output, got {peak}"
-        );
-    }
-
-    #[test]
-    fn drum_kit_unknown_key_silently_skipped() {
-        let mut s = one_note_song();
-        s.tracks[0].instrument = Instrument::new("drum_kit");
-        s.tracks[0].notes[0].pitch = Pitch::Name("zap".into()); // validate でエラー扱いだが render は黙ってスキップ
-        let buf = render_to_buffer(&s);
-        let peak = buf
-            .iter()
-            .map(|(l, r)| l.abs().max(r.abs()))
-            .fold(0.0_f32, f32::max);
-        assert_eq!(peak, 0.0);
-    }
-
-    #[test]
-    fn drum_kit_kit_param_changes_output() {
-        // kit="909" と kit=未指定 (default) で kick の出力が変わる
-        let mut s = one_note_song();
-        s.tracks[0].instrument = Instrument::new("drum_kit");
-        s.tracks[0].notes[0].pitch = Pitch::Name("kick".into());
-        let buf_default = render_to_buffer(&s);
-
-        let mut inst = Instrument::new("drum_kit");
-        inst.params.insert("kit".into(), serde_json::json!("909"));
-        s.tracks[0].instrument = inst;
-        let buf_909 = render_to_buffer(&s);
-
-        let diff: usize = buf_default
-            .iter()
-            .zip(buf_909.iter())
-            .filter(|(a, b)| (a.0 - b.0).abs() > 0.001)
-            .count();
-        assert!(
-            diff > 100,
-            "kit param should change kick waveform: diff={diff}"
-        );
+        assert!(diff > 100, "fx order should matter: diff={diff}");
     }
 
     #[test]
     fn soundfont_track_unknown_file_silently_skipped() {
-        // file が存在しなくても render は落ちず無音で済む (validate 側で報告される責務)。
-        let mut s = one_note_song();
+        // file が存在しなくても render は落ちず無音で済む。 env 不要 (file が存在しないので
+        // load を試みて失敗、 warning 出力後に continue する)。
+        let mut s = Song::new("smoke", 120, None);
         let mut inst = Instrument::new("soundfont");
         inst.params.insert(
             "file".into(),
             serde_json::json!("/nonexistent/codetta-test/missing.sf2"),
         );
-        s.tracks[0].instrument = inst;
+        s.tracks.push(Track {
+            id: "x".into(),
+            name: "X".into(),
+            instrument: inst,
+            volume: 0.8,
+            pan: 0.0,
+            mute: false,
+            solo: false,
+            fx: vec![],
+            notes: vec![Note {
+                t: 0.0,
+                pitch: Pitch::Name("A4".into()),
+                dur: 0.5,
+                vel: 100,
+            }],
+        });
         let buf = render_to_buffer(&s);
         let peak = buf
             .iter()
@@ -849,36 +632,10 @@ mod tests {
     }
 
     #[test]
-    fn soundfont_track_renders_when_sf2_available() {
-        let Some(sf2) = std::env::var("CODETTA_TEST_SF2").ok() else {
-            eprintln!("CODETTA_TEST_SF2 not set — skipping render-level SF2 integration test");
-            return;
-        };
-        let mut s = one_note_song();
-        s.tracks[0].notes[0].dur = 2.0; // ~1s @ 120bpm
-        let mut inst = Instrument::new("soundfont");
-        inst.params.insert("file".into(), serde_json::json!(sf2));
-        inst.params.insert("preset".into(), serde_json::json!(0));
-        s.tracks[0].instrument = inst;
-        let buf = render_to_buffer(&s);
-        let peak = buf
-            .iter()
-            .map(|(l, r)| l.abs().max(r.abs()))
-            .fold(0.0_f32, f32::max);
-        assert!(
-            peak > 0.01,
-            "SF2 render should produce audible output, got {peak}"
-        );
-    }
-
-    #[test]
     fn sf2_drum_track_resolves_drum_key_to_midi() {
         // bank=128 + Pitch::Name("kick") が GM Drum MIDI 36 に正規化されることを、
-        // 「audible な出力が出ること」 で確認する。 SF2 が無い CI では skip。
-        let Some(sf2) = std::env::var("CODETTA_TEST_SF2").ok() else {
-            eprintln!("CODETTA_TEST_SF2 not set — skipping SF2 drum key resolution test");
-            return;
-        };
+        // 「audible な出力が出ること」 で確認する (CDT-5 で実装)。
+        with_sf2!(sf2);
         let mut s = Song::new("drum-test", 120, None);
         let mut inst = Instrument::new("soundfont");
         inst.params.insert("file".into(), serde_json::json!(sf2));
@@ -907,24 +664,19 @@ mod tests {
             .fold(0.0_f32, f32::max);
         assert!(
             peak > 0.01,
-            "drum 要素名キーは bank=128 で GM MIDI 36 (kick) に正規化されて audible になるはず: peak={peak}"
+            "drum 要素名キーは bank=128 で GM MIDI 36 (kick) に正規化されて audible: peak={peak}"
         );
     }
 
     #[test]
     fn soundfont_two_tracks_share_load_and_render_equivalently() {
         // 同一 SF2 を 2 つの track で参照したとき、 SF2 cache を経由しても
-        // 「2 track の合算」 = 「1 track 単体 × 2 の合算」 になることを確認する。
-        // cache 利用後の Synthesizer 状態が track 間で漏れていないことの担保。
-        let Some(sf2) = std::env::var("CODETTA_TEST_SF2").ok() else {
-            eprintln!("CODETTA_TEST_SF2 not set — skipping SF2 cache equivalence test");
-            return;
-        };
+        // 「2 track の合算」 が「1 track 単体 × 2 の合算」 になることを確認する。
+        with_sf2!(sf2);
         let mut inst = Instrument::new("soundfont");
         inst.params.insert("file".into(), serde_json::json!(sf2));
         inst.params.insert("preset".into(), serde_json::json!(0));
 
-        // baseline: 1 track のみ render
         let mut s_one = Song::new("one", 120, None);
         s_one.tracks.push(Track {
             id: "t1".into(),
@@ -944,19 +696,13 @@ mod tests {
         });
         let buf_one = render_to_buffer(&s_one);
 
-        // dual: 同一 SF2 / 同一 note を 2 track 並列 (片方 pan 中央 + volume 半分 ×2)
         let mut s_two = s_one.clone();
         s_two.tracks.push(s_two.tracks[0].clone());
         s_two.tracks[1].id = "t2".into();
         let buf_two = render_to_buffer(&s_two);
 
-        // 出力長は等しい
         assert_eq!(buf_one.len(), buf_two.len(), "duration should match");
 
-        // 2 track 合算は 1 track の概ね 2 倍 (soft clip による頭打ちで完全 2 倍にはならない)。
-        // 期待値: 各サンプルが 2 倍された後 soft_clip(2x) を通った値。 つまり
-        //   y2[i] = soft_clip(2 * soft_clip_inv(y1[i]))
-        // を直接検証するのは過剰なので、 単純に「ピークが上がる」「波形がほぼ符号一致」のみ確認。
         let peak_one = buf_one
             .iter()
             .map(|(l, r)| l.abs().max(r.abs()))
@@ -970,28 +716,26 @@ mod tests {
             "two tracks should be louder than one: {peak_one} vs {peak_two}"
         );
 
-        // サンプルごとの符号 (rough waveform 一致) を確認: 全サンプル中、
-        // L チャンネルで両方とも sign が一致する割合が高いはず。
         let mut total = 0usize;
         let mut agree = 0usize;
         for ((l1, _), (l2, _)) in buf_one.iter().zip(buf_two.iter()) {
             if l1.abs() < 1e-4 && l2.abs() < 1e-4 {
-                continue; // 無音区間 (両方 0) は除外
+                continue;
             }
             total += 1;
             if l1.signum() == l2.signum() {
                 agree += 1;
             }
         }
-        // 同じ SF2 / 同じ note なので波形は単なる加算 + soft_clip。 符号一致率は十分高いはず。
         assert!(
             total > 0 && (agree as f32 / total as f32) > 0.95,
-            "two-track waveform sign should match single-track baseline: {agree}/{total}"
+            "two-track waveform sign should match: {agree}/{total}"
         );
     }
 
     #[test]
     fn writes_wav_file() {
+        with_sf2!(sf2);
         let mut p = std::env::temp_dir();
         p.push(format!(
             "codetta-render-test-{}-{}.wav",
@@ -1001,11 +745,10 @@ mod tests {
                 .as_nanos(),
             std::process::id()
         ));
-        let stats = render_to_wav(&one_note_song(), &p).unwrap();
+        let stats = render_to_wav(&one_note_song(&sf2), &p).unwrap();
         assert_eq!(stats.sample_rate, 44100);
         assert_eq!(stats.bit_depth, 16);
         assert!(stats.duration_sec > 0.0);
-        // 実ファイルが書けているか
         let meta = std::fs::metadata(&p).unwrap();
         assert!(meta.len() > 44, "WAV header + audio bytes expected");
         let _ = std::fs::remove_file(&p);

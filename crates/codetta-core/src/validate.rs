@@ -6,24 +6,11 @@ use crate::synth::soundfont::{
     resolve_soundfont_path, SoundFontParams, DRUM_BANK, KNOWN_DRUM_KEYS,
 };
 
-/// 既知のシンセ / ドラム楽器 type。
-pub const KNOWN_INSTRUMENT_TYPES: &[&str] = &[
-    "sin",
-    "saw",
-    "saw_lead",
-    "square",
-    "square_bass",
-    "triangle",
-    "saw_pad",
-    "drum_kit",
-    "soundfont",
-];
+/// 既知の楽器 type。 schema 0.2 では `soundfont` 1 種のみ (= 内蔵 synth は CDT-7 で削除)。
+pub const KNOWN_INSTRUMENT_TYPES: &[&str] = &["soundfont"];
 
-/// 既知のエフェクト type (Phase 0)。
+/// 既知のエフェクト type。
 pub const KNOWN_EFFECT_TYPES: &[&str] = &["lowpass", "highpass", "delay", "reverb", "distortion"];
-
-/// ADSR 共通パラメータ。 オシレータ系で共有。
-const ADSR_PARAM_KEYS: &[&str] = &["attack", "decay", "sustain", "release"];
 
 /// 楽器 type ごとに「認識される (= レンダリングで実際に使われる) param キー一覧」を返す。
 ///
@@ -32,10 +19,6 @@ const ADSR_PARAM_KEYS: &[&str] = &["attack", "decay", "sustain", "release"];
 /// 一致させる (sync test `catalog_params_match_instrument_param_keys` で保証)。
 pub fn instrument_param_keys(kind: &str) -> Option<&'static [&'static str]> {
     match kind {
-        "sin" | "saw" | "saw_lead" | "triangle" => Some(ADSR_PARAM_KEYS),
-        "square" | "square_bass" => Some(&["attack", "decay", "sustain", "release", "pulse_width"]),
-        "saw_pad" => Some(&["attack", "decay", "sustain", "release", "detune_cents"]),
-        "drum_kit" => Some(&["kit"]),
         "soundfont" => Some(&["file", "preset", "bank"]),
         _ => None,
     }
@@ -140,7 +123,6 @@ pub fn validate(song: &Song) -> Vec<ValidationError> {
                 format!("unknown instrument type: {:?}", track.instrument.kind),
             ));
         }
-        let is_drum_kit = track.instrument.kind == "drum_kit";
         let mut is_sf2_drum = false;
 
         // soundfont params: file/preset/bank の型 + 解決後 path の存在を確認
@@ -243,22 +225,7 @@ pub fn validate(song: &Song) -> Vec<ValidationError> {
             }
 
             // pitch
-            if is_drum_kit {
-                // 内蔵 drum_kit (CDT-7 で削除予定) は drum 要素名キー string のみ許容
-                match note.pitch.as_drum_key() {
-                    Ok(k) if KNOWN_DRUM_KEYS.contains(&k) => {}
-                    Ok(k) => errors.push(ValidationError::new(
-                        "INVALID_NOTE",
-                        format!("{nprefix}.pitch"),
-                        format!("unknown drum key: {k:?}"),
-                    )),
-                    Err(_) => errors.push(ValidationError::new(
-                        "INVALID_NOTE",
-                        format!("{nprefix}.pitch"),
-                        "drum_kit track requires a drum key string (e.g. \"kick\")",
-                    )),
-                }
-            } else if is_sf2_drum {
+            if is_sf2_drum {
                 // SF2 + bank=128: drum 要素名キー / MIDI 番号 / ノート名表記 のいずれも可
                 // (02-project-format.md L175「数値 / ノート名表記との混在も可」)
                 match &note.pitch {
@@ -303,6 +270,9 @@ mod tests {
     use crate::model::{Effect, Instrument, Metadata, Note, Pitch, Track};
     use serde_json::Map;
 
+    /// schema 0.2 ベースのテスト用 song。 SF2 path は存在しないので `validate` を呼ぶと
+    /// SOUNDFONT_FILE_NOT_FOUND が常に 1 件出る前提。 各テストは「他に期待する error が
+    /// 追加されるか」 を検査する形で書く。
     fn ok_song() -> Song {
         Song {
             version: crate::SCHEMA_VERSION.into(),
@@ -318,7 +288,16 @@ mod tests {
             tracks: vec![Track {
                 id: "lead".into(),
                 name: "Lead".into(),
-                instrument: Instrument::new("saw_lead"),
+                instrument: {
+                    let mut i = Instrument::new("soundfont");
+                    i.params.insert(
+                        "file".into(),
+                        serde_json::json!("/nonexistent/codetta-test/abs.sf2"),
+                    );
+                    i.params.insert("preset".into(), serde_json::json!(81));
+                    i.params.insert("bank".into(), serde_json::json!(0));
+                    i
+                },
                 volume: 0.8,
                 pan: 0.0,
                 mute: false,
@@ -337,16 +316,28 @@ mod tests {
         }
     }
 
+    /// SOUNDFONT_FILE_NOT_FOUND を除いた errors を返す。 ok_song の SF2 path が常に
+    /// 不在なので、 fake path 起因の error は除外して他の検査内容を判定する。
+    fn non_sf2_errors(song: &Song) -> Vec<ValidationError> {
+        validate(song)
+            .into_iter()
+            .filter(|e| e.code != "SOUNDFONT_FILE_NOT_FOUND")
+            .collect()
+    }
+
     #[test]
-    fn happy_path() {
-        assert!(validate(&ok_song()).is_empty());
+    fn happy_path_apart_from_missing_sf2() {
+        // fake SF2 path 起因の SOUNDFONT_FILE_NOT_FOUND だけが errs にある = 他は valid
+        let errs = validate(&ok_song());
+        assert_eq!(errs.len(), 1, "expected exactly one error, got: {errs:?}");
+        assert_eq!(errs[0].code, "SOUNDFONT_FILE_NOT_FOUND");
     }
 
     #[test]
     fn rejects_bad_bpm() {
         let mut s = ok_song();
         s.metadata.bpm = 5;
-        let errs = validate(&s);
+        let errs = non_sf2_errors(&s);
         assert!(errs.iter().any(|e| e.path == "metadata.bpm"));
     }
 
@@ -354,19 +345,19 @@ mod tests {
     fn rejects_bad_master_gain() {
         let mut s = ok_song();
         s.metadata.master_gain = -0.1;
-        assert!(validate(&s)
+        assert!(non_sf2_errors(&s)
             .iter()
             .any(|e| e.path == "metadata.master_gain"));
         s.metadata.master_gain = 4.5;
-        assert!(validate(&s)
+        assert!(non_sf2_errors(&s)
             .iter()
             .any(|e| e.path == "metadata.master_gain"));
         s.metadata.master_gain = f32::NAN;
-        assert!(validate(&s)
+        assert!(non_sf2_errors(&s)
             .iter()
             .any(|e| e.path == "metadata.master_gain"));
         s.metadata.master_gain = 2.5;
-        assert!(validate(&s).is_empty());
+        assert!(non_sf2_errors(&s).is_empty());
     }
 
     #[test]
@@ -409,24 +400,12 @@ mod tests {
     }
 
     #[test]
-    fn drum_track_requires_drum_key() {
-        let mut s = ok_song();
-        s.tracks[0].instrument = Instrument::new("drum_kit");
-        s.tracks[0].notes[0].pitch = Pitch::Name("C4".into());
-        let errs = validate(&s);
-        assert!(errs
-            .iter()
-            .any(|e| e.code == "INVALID_NOTE" && e.path.ends_with(".pitch")));
-
-        // 正しい drum key なら通る
-        s.tracks[0].notes[0].pitch = Pitch::Name("kick".into());
-        assert!(validate(&s).is_empty());
-    }
-
-    #[test]
     fn soundfont_track_requires_file_param() {
         let mut s = ok_song();
-        s.tracks[0].instrument = Instrument::new("soundfont");
+        let mut inst = Instrument::new("soundfont");
+        // file 省略
+        inst.params.insert("preset".into(), serde_json::json!(0));
+        s.tracks[0].instrument = inst;
         let errs = validate(&s);
         assert!(
             errs.iter()
@@ -437,114 +416,11 @@ mod tests {
 
     #[test]
     fn soundfont_track_reports_missing_file() {
-        let mut s = ok_song();
-        let mut inst = Instrument::new("soundfont");
-        inst.params.insert(
-            "file".into(),
-            serde_json::json!("/nonexistent/codetta-test/abs.sf2"),
-        );
-        s.tracks[0].instrument = inst;
-        let errs = validate(&s);
+        // ok_song の SF2 path が無効なので、 SOUNDFONT_FILE_NOT_FOUND が出る
+        let errs = validate(&ok_song());
         assert!(
             errs.iter().any(|e| e.code == "SOUNDFONT_FILE_NOT_FOUND"),
             "expected SOUNDFONT_FILE_NOT_FOUND, got: {errs:?}"
-        );
-    }
-
-    #[test]
-    fn sf2_drum_track_accepts_drum_key_pitch() {
-        // SF2 + bank=128 の track は drum 要素名キー (kick 等) を許容する
-        let mut s = ok_song();
-        let mut inst = Instrument::new("soundfont");
-        // 存在しない path だが SOUNDFONT_FILE_NOT_FOUND は別エラーとして許容、
-        // ここで見たいのは drum 要素名キーが INVALID_NOTE にならないこと
-        inst.params.insert(
-            "file".into(),
-            serde_json::json!("/nonexistent/codetta-test/abs.sf2"),
-        );
-        inst.params.insert("preset".into(), serde_json::json!(0));
-        inst.params.insert("bank".into(), serde_json::json!(128));
-        s.tracks[0].instrument = inst;
-        s.tracks[0].notes[0].pitch = Pitch::Name("kick".into());
-        let errs = validate(&s);
-        assert!(
-            !errs
-                .iter()
-                .any(|e| e.code == "INVALID_NOTE" && e.path.ends_with(".pitch")),
-            "drum key on SF2+bank=128 must be accepted: {errs:?}"
-        );
-    }
-
-    #[test]
-    fn sf2_drum_track_accepts_midi_and_note_name_pitches() {
-        // 02-project-format.md L175: SF2 drum track では数値 / ノート名表記との混在も可
-        let mut s = ok_song();
-        let mut inst = Instrument::new("soundfont");
-        inst.params.insert(
-            "file".into(),
-            serde_json::json!("/nonexistent/codetta-test/abs.sf2"),
-        );
-        inst.params.insert("bank".into(), serde_json::json!(128));
-        s.tracks[0].instrument = inst;
-
-        // ノート名 OK
-        s.tracks[0].notes[0].pitch = Pitch::Name("C4".into());
-        let errs = validate(&s);
-        assert!(
-            !errs
-                .iter()
-                .any(|e| e.code == "INVALID_NOTE" && e.path.ends_with(".pitch")),
-            "note name on SF2+bank=128 must be accepted: {errs:?}"
-        );
-
-        // MIDI 番号 OK
-        s.tracks[0].notes[0].pitch = Pitch::Midi(38);
-        let errs = validate(&s);
-        assert!(
-            !errs
-                .iter()
-                .any(|e| e.code == "INVALID_NOTE" && e.path.ends_with(".pitch")),
-            "MIDI number on SF2+bank=128 must be accepted: {errs:?}"
-        );
-    }
-
-    #[test]
-    fn sf2_drum_track_rejects_invalid_string_pitch() {
-        // SF2 + bank=128 でも drum key でもノート名でもない文字列は弾く
-        let mut s = ok_song();
-        let mut inst = Instrument::new("soundfont");
-        inst.params.insert(
-            "file".into(),
-            serde_json::json!("/nonexistent/codetta-test/abs.sf2"),
-        );
-        inst.params.insert("bank".into(), serde_json::json!(128));
-        s.tracks[0].instrument = inst;
-        s.tracks[0].notes[0].pitch = Pitch::Name("frobnicator".into());
-        let errs = validate(&s);
-        assert!(
-            errs.iter()
-                .any(|e| e.code == "INVALID_NOTE" && e.path.ends_with(".pitch")),
-            "unknown string on SF2+bank=128 must be rejected: {errs:?}"
-        );
-    }
-
-    #[test]
-    fn sf2_melodic_track_rejects_drum_key_pitch() {
-        // SF2 + bank=0 (melodic) は drum 要素名キーを通常のノート名解釈してエラー扱い
-        let mut s = ok_song();
-        let mut inst = Instrument::new("soundfont");
-        inst.params.insert(
-            "file".into(),
-            serde_json::json!("/nonexistent/codetta-test/abs.sf2"),
-        );
-        inst.params.insert("bank".into(), serde_json::json!(0));
-        s.tracks[0].instrument = inst;
-        s.tracks[0].notes[0].pitch = Pitch::Name("kick".into());
-        let errs = validate(&s);
-        assert!(
-            errs.iter()
-                .any(|e| e.code == "INVALID_NOTE" && e.path.ends_with(".pitch")),
-            "drum key on SF2+bank=0 must be rejected: {errs:?}"
         );
     }
 
@@ -559,14 +435,14 @@ mod tests {
     }
 
     #[test]
-    fn warns_on_unknown_param_for_saw() {
-        // saw は ADSR のみ受け取る。 pulse_width は square 系の param なので warn
+    fn warns_on_unknown_param_for_soundfont() {
+        // soundfont の known params は file / preset / bank のみ。 attack は内蔵 synth 系
+        // 用の param なので warn
         let mut s = ok_song();
-        s.tracks[0].instrument = Instrument::new("saw");
         s.tracks[0]
             .instrument
             .params
-            .insert("pulse_width".into(), serde_json::json!(0.3));
+            .insert("attack".into(), serde_json::json!(0.05));
         let errs = validate(&s);
         let warn = errs.iter().find(|e| e.code == "UNKNOWN_PARAM");
         assert!(
@@ -579,49 +455,17 @@ mod tests {
             "expected severity=warning, got: {:?}",
             w.severity
         );
-        assert!(w.path.ends_with(".instrument.params.pulse_width"));
-        // error 級は出ない
-        assert!(
-            !errs.iter().any(|e| e.is_error()),
-            "unexpected errors: {errs:?}"
-        );
+        assert!(w.path.ends_with(".instrument.params.attack"));
     }
 
     #[test]
-    fn warns_on_unknown_param_for_square_bass() {
-        // square_bass は ADSR + pulse_width のみ。 detune_cents は saw_pad 用
-        let mut s = ok_song();
-        s.tracks[0].instrument = Instrument::new("square_bass");
-        s.tracks[0]
-            .instrument
-            .params
-            .insert("detune_cents".into(), serde_json::json!(10.0));
-        let errs = validate(&s);
+    fn known_soundfont_params_do_not_warn() {
+        // soundfont の file / preset / bank はすべて known → warn なし
+        // (SOUNDFONT_FILE_NOT_FOUND は別件で 1 件出る、 warning は出ない)
+        let errs = validate(&ok_song());
         assert!(
-            errs.iter().any(|e| e.code == "UNKNOWN_PARAM"
-                && e.is_warning()
-                && e.path.ends_with(".instrument.params.detune_cents")),
-            "expected UNKNOWN_PARAM warning for detune_cents, got: {errs:?}"
-        );
-    }
-
-    #[test]
-    fn known_params_do_not_warn() {
-        // square に pulse_width は OK
-        let mut s = ok_song();
-        s.tracks[0].instrument = Instrument::new("square");
-        s.tracks[0]
-            .instrument
-            .params
-            .insert("pulse_width".into(), serde_json::json!(0.3));
-        s.tracks[0]
-            .instrument
-            .params
-            .insert("attack".into(), serde_json::json!(0.02));
-        let errs = validate(&s);
-        assert!(
-            errs.is_empty(),
-            "expected no errors/warnings, got: {errs:?}"
+            !errs.iter().any(|e| e.code == "UNKNOWN_PARAM"),
+            "expected no UNKNOWN_PARAM warnings, got: {errs:?}"
         );
     }
 
@@ -645,10 +489,6 @@ mod tests {
             w.severity
         );
         assert!(w.path.ends_with(".fx[0].feedback"));
-        assert!(
-            !errs.iter().any(|e| e.is_error()),
-            "unexpected errors: {errs:?}"
-        );
     }
 
     #[test]
@@ -687,7 +527,7 @@ mod tests {
                 m
             },
         };
-        let errs = validate(&s);
+        let errs = non_sf2_errors(&s);
         assert!(
             errs.is_empty(),
             "expected no errors/warnings, got: {errs:?}"
@@ -728,6 +568,88 @@ mod tests {
         assert!(
             !errs.iter().any(|e| e.code == "UNKNOWN_PARAM"),
             "should not warn on params when instrument type itself is unknown: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn sf2_drum_track_accepts_drum_key_pitch() {
+        // SF2 + bank=128 の track は drum 要素名キー (kick 等) を許容する
+        let mut s = ok_song();
+        s.tracks[0]
+            .instrument
+            .params
+            .insert("bank".into(), serde_json::json!(128));
+        s.tracks[0].notes[0].pitch = Pitch::Name("kick".into());
+        let errs = validate(&s);
+        assert!(
+            !errs
+                .iter()
+                .any(|e| e.code == "INVALID_NOTE" && e.path.ends_with(".pitch")),
+            "drum key on SF2+bank=128 must be accepted: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn sf2_drum_track_accepts_midi_and_note_name_pitches() {
+        // 02-project-format.md L175: SF2 drum track では数値 / ノート名表記との混在も可
+        let mut s = ok_song();
+        s.tracks[0]
+            .instrument
+            .params
+            .insert("bank".into(), serde_json::json!(128));
+
+        // ノート名 OK
+        s.tracks[0].notes[0].pitch = Pitch::Name("C4".into());
+        let errs = validate(&s);
+        assert!(
+            !errs
+                .iter()
+                .any(|e| e.code == "INVALID_NOTE" && e.path.ends_with(".pitch")),
+            "note name on SF2+bank=128 must be accepted: {errs:?}"
+        );
+
+        // MIDI 番号 OK
+        s.tracks[0].notes[0].pitch = Pitch::Midi(38);
+        let errs = validate(&s);
+        assert!(
+            !errs
+                .iter()
+                .any(|e| e.code == "INVALID_NOTE" && e.path.ends_with(".pitch")),
+            "MIDI number on SF2+bank=128 must be accepted: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn sf2_drum_track_rejects_invalid_string_pitch() {
+        // SF2 + bank=128 でも drum key でもノート名でもない文字列は弾く
+        let mut s = ok_song();
+        s.tracks[0]
+            .instrument
+            .params
+            .insert("bank".into(), serde_json::json!(128));
+        s.tracks[0].notes[0].pitch = Pitch::Name("frobnicator".into());
+        let errs = validate(&s);
+        assert!(
+            errs.iter()
+                .any(|e| e.code == "INVALID_NOTE" && e.path.ends_with(".pitch")),
+            "unknown string on SF2+bank=128 must be rejected: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn sf2_melodic_track_rejects_drum_key_pitch() {
+        // SF2 + bank=0 (melodic) は drum 要素名キーを通常のノート名解釈してエラー扱い
+        let mut s = ok_song();
+        s.tracks[0]
+            .instrument
+            .params
+            .insert("bank".into(), serde_json::json!(0));
+        s.tracks[0].notes[0].pitch = Pitch::Name("kick".into());
+        let errs = validate(&s);
+        assert!(
+            errs.iter()
+                .any(|e| e.code == "INVALID_NOTE" && e.path.ends_with(".pitch")),
+            "drum key on SF2+bank=0 must be rejected: {errs:?}"
         );
     }
 }

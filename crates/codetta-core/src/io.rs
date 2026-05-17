@@ -41,10 +41,17 @@ mod tests {
 
     fn sample_song() -> Song {
         let mut s = Song::new("Test", 140, Some("Am".into()));
+        let mut inst = Instrument::new("soundfont");
+        inst.params.insert(
+            "file".into(),
+            serde_json::json!("GeneralUser-GS-v1.471.sf2"),
+        );
+        inst.params.insert("preset".into(), serde_json::json!(81));
+        inst.params.insert("bank".into(), serde_json::json!(0));
         s.tracks.push(Track {
             id: "lead".into(),
             name: "Lead".into(),
-            instrument: Instrument::new("saw_lead"),
+            instrument: inst,
             volume: 0.7,
             pan: 0.0,
             mute: false,

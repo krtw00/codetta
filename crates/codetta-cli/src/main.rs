@@ -139,8 +139,10 @@ struct AddTrackArgs {
     /// 表示名 (省略時は id と同じ)
     #[arg(long)]
     name: Option<String>,
-    /// 楽器 type (デフォルト `sin`)
-    #[arg(long, default_value = "sin")]
+    /// 楽器 type。 schema 0.2 では `soundfont` 1 種のみ (= デフォルト)。
+    /// SF2 path や preset は `--params-json` で指定する (例:
+    /// `--params-json '{"file":"GeneralUser-GS-v1.471.sf2","preset":0,"bank":0}'`)。
+    #[arg(long, default_value = "soundfont")]
     instrument: String,
     /// 音量 0.0-1.0
     #[arg(long, default_value_t = 0.8)]
@@ -983,94 +985,13 @@ fn emit_migrate_error(e: &MigrateError) -> u8 {
 /// 既知 type を追加したら必ずここにも description / params を足す
 /// (LLM / MCP がパラメータを引けないと話にならない)。
 fn instrument_catalog() -> Vec<Value> {
-    let adsr_params = json!({
-        "attack":  { "type": "float", "default": 0.01, "range": [0.0, 10.0], "unit": "sec" },
-        "decay":   { "type": "float", "default": 0.1,  "range": [0.0, 10.0], "unit": "sec" },
-        "sustain": { "type": "float", "default": 0.7,  "range": [0.0, 1.0] },
-        "release": { "type": "float", "default": 0.2,  "range": [0.0, 10.0], "unit": "sec" },
-    });
-
     KNOWN_INSTRUMENT_TYPES
         .iter()
         .map(|&t| match t {
-            "sin" => json!({
-                "type": "sin",
-                "category": "melodic",
-                "description": "純音 (倍音なし)。 サブベース / パッド / FM 素材",
-                "params": adsr_params,
-            }),
-            "saw" => json!({
-                "type": "saw",
-                "category": "melodic",
-                "description": "PolyBLEP saw (倍音豊富)。 主旋律 / アルペジオ / コード裏鳴り / 単音ベースに使える汎用ノコギリ波。 用途を絞った alias が saw_lead (主旋律前面) / saw_pad (持続パッド)",
-                "params": adsr_params,
-            }),
-            "saw_lead" => json!({
-                "type": "saw_lead",
-                "category": "melodic",
-                "description": "`saw` と同一波形の用途別 alias。 リード (前面に出る主旋律) を意図する時に選ぶ。 attack / release を短めにして立ち上がりをハッキリさせる使い方が一般的",
-                "params": adsr_params,
-            }),
-            "square" => json!({
-                "type": "square",
-                "category": "melodic",
-                "description": "PolyBLEP pulse (デューティ比可変)。 シーケンス / アルペジオ / コード / 8bit 風メロディ向け汎用パルス波。 低音用途専用の alias が square_bass",
-                "params": {
-                    "attack":  adsr_params["attack"],
-                    "decay":   adsr_params["decay"],
-                    "sustain": adsr_params["sustain"],
-                    "release": adsr_params["release"],
-                    "pulse_width": { "type": "float", "default": 0.5, "range": [0.05, 0.95] },
-                },
-            }),
-            "square_bass" => json!({
-                "type": "square_bass",
-                "category": "melodic",
-                "description": "`square` と同一波形の用途別 alias。 低音ベース (root のみ / root + 5th 重ね等) を意図する時に選ぶ。 pulse_width 0.5 + 短い release が定石、 8bit 風アレンジでも頻出",
-                "params": {
-                    "attack":  adsr_params["attack"],
-                    "decay":   adsr_params["decay"],
-                    "sustain": adsr_params["sustain"],
-                    "release": adsr_params["release"],
-                    "pulse_width": { "type": "float", "default": 0.5, "range": [0.05, 0.95] },
-                },
-            }),
-            "triangle" => json!({
-                "type": "triangle",
-                "category": "melodic",
-                "description": "三角波 (解析式)。 柔らかい音、 笛系",
-                "params": adsr_params,
-            }),
-            "saw_pad" => json!({
-                "type": "saw_pad",
-                "category": "melodic",
-                "description": "saw × 3 detune。 厚みあるパッド",
-                "params": {
-                    "attack":  adsr_params["attack"],
-                    "decay":   adsr_params["decay"],
-                    "sustain": adsr_params["sustain"],
-                    "release": adsr_params["release"],
-                    "detune_cents": { "type": "float", "default": 10.0, "range": [0.0, 50.0], "unit": "cent" },
-                },
-            }),
-            "drum_kit" => json!({
-                "type": "drum_kit",
-                "category": "drum",
-                "description": "GM Drum 互換キーの全合成ドラム。 pitch には drum key (例: \"kick\") を渡す",
-                "params": {
-                    "kit": {
-                        "type": "string",
-                        "default": "default",
-                        "enum": ["default", "808", "909"],
-                        "note": "kit バリエーションは kick / snare のみ反映 (他の voice は default 固定)",
-                    },
-                },
-                "drum_keys": KNOWN_DRUM_KEYS,
-            }),
             "soundfont" => json!({
                 "type": "soundfont",
                 "category": "sampler",
-                "description": "外部 SoundFont (.sf2) ファイル経由のサンプラ。 生楽器 / GM 互換音色用 (07-soundfont.md)。 file は絶対 path か $CODETTA_SOUNDFONT_DIR (default ~/Music/sf2/) からの相対 path",
+                "description": "外部 SoundFont (.sf2) ファイル経由のサンプラ。 schema 0.2 では唯一の楽器 type (07-soundfont.md)。 file は絶対 path か $CODETTA_SOUNDFONT_DIR (default ~/Music/sf2/) からの相対 path。 bank=128 は GM Drum kit (= drum_keys の要素名キーを pitch に書ける)",
                 "params": {
                     "file": {
                         "type": "string",
@@ -1090,6 +1011,7 @@ fn instrument_catalog() -> Vec<Value> {
                         "note": "GM/GS bank (melodic は 0、 GS Drum は 128)",
                     },
                 },
+                "drum_keys": KNOWN_DRUM_KEYS,
             }),
             _ => json!({
                 "type": t,
@@ -1525,20 +1447,22 @@ mod tests {
     }
 
     #[test]
-    fn drum_kit_entry_lists_all_drum_keys() {
+    fn soundfont_entry_lists_all_drum_keys() {
+        // schema 0.2 では SF2 catalog の `drum_keys` フィールドが GM Drum (bank=128) の
+        // 要素名キー一覧の正本 (= 旧 drum_kit catalog から CDT-7 で移管)。
         let catalog = instrument_catalog();
-        let drum = catalog
+        let sf = catalog
             .iter()
-            .find(|e| e["type"].as_str() == Some("drum_kit"))
-            .expect("drum_kit catalog entry");
-        let keys: Vec<&str> = drum["drum_keys"]
+            .find(|e| e["type"].as_str() == Some("soundfont"))
+            .expect("soundfont catalog entry");
+        let keys: Vec<&str> = sf["drum_keys"]
             .as_array()
             .expect("drum_keys array")
             .iter()
             .map(|v| v.as_str().expect("drum key string"))
             .collect();
         for k in KNOWN_DRUM_KEYS {
-            assert!(keys.contains(k), "drum_kit catalog missing key {k}");
+            assert!(keys.contains(k), "soundfont catalog missing drum key {k}");
         }
     }
 

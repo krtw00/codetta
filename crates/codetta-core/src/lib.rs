@@ -30,8 +30,10 @@ pub use render::{render_to_buffer, render_to_wav, RenderStats};
 pub use synth::soundfont::KNOWN_DRUM_KEYS;
 pub use validate::{validate, KNOWN_EFFECT_TYPES, KNOWN_INSTRUMENT_TYPES};
 
-/// 現バージョンで書き出すスキーマバージョン。 0.1 据置 (CDT-7 で 0.2 完全移行予定)。
-pub const SCHEMA_VERSION: &str = "0.1";
+/// 現バージョンで書き出すスキーマバージョン。 SF2 一本化済 (CDT-7 で 0.2 完全移行)。
+pub const SCHEMA_VERSION: &str = "0.2";
 
-/// 読み込み可能なスキーマバージョン一覧。 0.1 (既存) + 0.2 (CDT-6 migrate 出力)。
-pub const SUPPORTED_VERSIONS: &[&str] = &["0.1", "0.2"];
+/// 読み込み可能なスキーマバージョン一覧。 0.2 のみ。 旧 0.1 は `io::load` で reject
+/// される (= `UnknownVersion` error)。 0.1 を読みたい場合は `codetta migrate` で
+/// 0.2 に変換してから load する (CDT-6)。
+pub const SUPPORTED_VERSIONS: &[&str] = &["0.2"];
