@@ -373,6 +373,63 @@ export function registerTools(server: McpServer): void {
     },
   );
 
+  // ----- import_midi -----
+  server.registerTool(
+    "import_midi",
+    {
+      title: "Import a standard MIDI file (.mid) into .codetta (0.2)",
+      description:
+        "標準 MIDI ファイルを `.codetta` (schema 0.2) に取り込む。 SMF Type 0 / Type 1 両対応 (Type 2 と SMPTE timecode は reject)。 channel ↔ track は 1:1 (ch10 = drum bank 128)、 ノート pitch は数値固定 (drum の要素名キー逆変換は CDT-3 では未実装)。 拡張属性 (master_gain / fx / SF2 preset 詳細) は `extensions` モードに従って復元: `text-meta` (default、 MTrk 0 先頭の Text Meta) → sidecar (`<basename>.codetta.meta.json`) → MIDI のみ。 `sf2` 指定時は preset 存在確認を行い、 見つからなければ preset 0 fallback + warning。 ADR: docs/design/08-midi.md",
+      inputSchema: {
+        path: z
+          .string()
+          .describe("入力 .mid ファイル。 相対パスなら $CODETTA_WORKSPACE 配下"),
+        output: z
+          .string()
+          .describe("出力 .codetta ファイル。 相対パスなら $CODETTA_WORKSPACE 配下"),
+        extensions: z
+          .enum(["text-meta", "sidecar", "none"])
+          .optional()
+          .describe(
+            "拡張属性の取り出しモード (default: 'text-meta')",
+          ),
+        sf2_file: z
+          .string()
+          .optional()
+          .describe(
+            "Instrument.params.file に書く SF2 ファイル名 (省略時は default SF2 = GeneralUser-GS-v1.471.sf2)。 指定があれば preset 存在確認も行う",
+          ),
+        name: z
+          .string()
+          .optional()
+          .describe("生成 Song の metadata.name (省略時は MIDI path の stem)"),
+        overwrite: z
+          .boolean()
+          .optional()
+          .describe("既存 .codetta を上書き (default false)"),
+      },
+    },
+    async (input) => {
+      const inPath = resolveSongPath(input.path);
+      const outPath = resolveSongPath(input.output);
+      const args = ["import-midi", inPath, "-o", outPath];
+      if (input.extensions !== undefined) {
+        pushOpt(args, "--extensions", input.extensions);
+      }
+      if (input.sf2_file !== undefined) {
+        pushOpt(args, "--sf2", input.sf2_file);
+      }
+      if (input.name !== undefined) {
+        pushOpt(args, "--name", input.name);
+      }
+      if (input.overwrite === true) {
+        args.push("--force");
+      }
+      const result = await runCliAsToolResult(args);
+      return jsonContent(result);
+    },
+  );
+
   // ----- set_instrument -----
   server.registerTool(
     "set_instrument",

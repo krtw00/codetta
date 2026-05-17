@@ -82,7 +82,7 @@ melodic 用には ch1-9 + ch11-16 = **15 channel** が使える。 drum は ch10
 
 1. MIDI を走査して使用 channel の集合を作る
 2. ch10 (= idx 9) があれば → `bank: 128, preset: 0` の drum track として 1 つ追加
-3. それ以外の channel (ch1-9, 11-16) を順に track として展開、 順序は MIDI 出現順 (= 各 channel が最初に note on を発した tick の順)
+3. それ以外の channel (ch1-9, 11-16) を順に track として展開、 順序は **channel index 昇順** (= 自然に ch1 → ch2 → ... → ch10 (drum) → ch11 → ... と並ぶ)。 これは text-meta の `tracks[]` 並び (= L190) と合わせるための実装規約 (= CDT-3 で確定)
 4. 各 track の `instrument.params.preset` は channel の Program Change の最終値 (= 同 channel 内で複数 Program Change がある MIDI は最後の値が勝つ)、 Program Change が一度も無い channel は `preset: 0`
 5. CC7 / CC10 を `volume` / `pan` に変換 (= 0-127 を 0.0-1.0 と -1.0-1.0 に正規化)
 

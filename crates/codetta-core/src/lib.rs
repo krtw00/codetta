@@ -10,6 +10,7 @@ pub mod edit;
 pub mod effect;
 pub mod error;
 pub mod io;
+pub mod midi;
 pub mod migrate;
 pub mod model;
 pub mod render;
@@ -22,6 +23,10 @@ pub use edit::{
 };
 pub use error::{CodettaError, Severity, ValidationError};
 pub use io::{load, save};
+pub use midi::{
+    import_midi, ExtensionsMode, ExtensionsRecovered, MidiError, MidiImportOptions,
+    MidiImportOutcome, MidiImportWarning,
+};
 pub use migrate::{
     migrate_song_json, InstrumentMapping, MigrateError, MigrateOutcome, MigrateWarning, DEFAULT_SF2,
 };

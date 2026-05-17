@@ -144,6 +144,7 @@ dependencies = [
  "assert_cmd",
  "clap",
  "codetta-core",
+ "midly",
  "serde",
  "serde_json",
 ]

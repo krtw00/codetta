@@ -11,6 +11,7 @@ use std::process::ExitCode;
 use clap::{ArgGroup, Args, Parser, Subcommand};
 use codetta_core::{
     self as core,
+    midi::{ExtensionsMode, MidiError, MidiImportOptions},
     migrate::{MigrateError, DEFAULT_SF2},
     synth::soundfont::{list_soundfont_presets, resolve_soundfont_path, SoundFontError},
     CodettaError, Effect, Instrument, Note, NoteOp, Song, Track, ValidationError, KNOWN_DRUM_KEYS,
@@ -80,6 +81,8 @@ enum Command {
     Schema,
     /// 旧 schema (0.1) を最新 (0.2) に変換し、 内蔵 synth を SF2 preset にマップする
     Migrate(MigrateArgs),
+    /// 標準 MIDI ファイル (.mid) を `.codetta` (0.2) に取り込む
+    ImportMidi(ImportMidiArgs),
 }
 
 #[derive(Args)]
@@ -272,6 +275,39 @@ struct MigrateArgs {
 }
 
 #[derive(Args)]
+struct ImportMidiArgs {
+    /// 入力 `.mid` ファイル
+    path: PathBuf,
+    /// 出力 `.codetta` ファイル
+    #[arg(short, long)]
+    output: PathBuf,
+    /// 拡張属性 (master_gain / fx / SF2 preset 詳細) の取り出しモード
+    #[arg(long, value_parser = parse_extensions_mode, default_value = "text-meta")]
+    extensions: ExtensionsMode,
+    /// `Instrument.params.file` に書く SF2 ファイル名 (省略時は default SF2)。
+    /// 指定があれば import 時に preset 存在確認も行い、 見つからなければ preset 0 fallback + warning。
+    #[arg(long, default_value = DEFAULT_SF2)]
+    sf2: String,
+    /// 生成される Song の `metadata.name` (省略時は MIDI path の stem)
+    #[arg(long)]
+    name: Option<String>,
+    /// 既存 `.codetta` を上書き
+    #[arg(long)]
+    force: bool,
+}
+
+fn parse_extensions_mode(s: &str) -> Result<ExtensionsMode, String> {
+    match s {
+        "text-meta" => Ok(ExtensionsMode::TextMeta),
+        "sidecar" => Ok(ExtensionsMode::Sidecar),
+        "none" => Ok(ExtensionsMode::None),
+        other => Err(format!(
+            "unknown extensions mode {other:?} (expected text-meta / sidecar / none)"
+        )),
+    }
+}
+
+#[derive(Args)]
 struct RenderArgs {
     /// 入力 `.codetta` ファイル
     path: PathBuf,
@@ -307,6 +343,7 @@ fn main() -> ExitCode {
         Command::ListSoundfontPresets(a) => cmd_list_soundfont_presets(a, &cli.common),
         Command::Schema => cmd_schema(),
         Command::Migrate(a) => cmd_migrate(a, &cli.common),
+        Command::ImportMidi(a) => cmd_import_midi(a, &cli.common),
     };
     ExitCode::from(exit)
 }
@@ -963,6 +1000,114 @@ fn cmd_migrate(args: MigrateArgs, common: &CommonOpts) -> u8 {
     }
     emit_json(&payload);
     0
+}
+
+fn cmd_import_midi(args: ImportMidiArgs, common: &CommonOpts) -> u8 {
+    if args.output.exists() && !args.force {
+        return emit_error(&CodettaError::FileExists(args.output.clone()));
+    }
+
+    let options = MidiImportOptions {
+        extensions: args.extensions,
+        sf2_file: Some(args.sf2.clone()),
+        song_name: args.name.clone(),
+    };
+
+    if !common.quiet {
+        eprintln!(
+            "[INFO] Importing {} -> {}",
+            args.path.display(),
+            args.output.display()
+        );
+    }
+
+    let outcome = match core::import_midi(&args.path, &options) {
+        Ok(o) => o,
+        Err(e) => return emit_midi_error(&e),
+    };
+
+    let (errors, validate_warnings) = partition_validation(core::validate(&outcome.song));
+    if !errors.is_empty() {
+        if !common.quiet {
+            eprintln!(
+                "[ERROR] imported song failed validation: {} error(s), {} warning(s)",
+                errors.len(),
+                validate_warnings.len()
+            );
+        }
+        emit_json(&validation_payload(false, &errors, &validate_warnings));
+        return 1;
+    }
+
+    if let Err(e) = core::save(&outcome.song, &args.output, true) {
+        return emit_error(&e);
+    }
+
+    let abs_in = std::fs::canonicalize(&args.path).unwrap_or_else(|_| args.path.clone());
+    let abs_out = std::fs::canonicalize(&args.output).unwrap_or_else(|_| args.output.clone());
+
+    if !common.quiet {
+        eprintln!(
+            "[OK] Imported {} -> {} ({}, ppq={}, {} track(s), {} import warning(s), {} validate warning(s))",
+            abs_in.display(),
+            abs_out.display(),
+            outcome.source_format,
+            outcome.ppq,
+            outcome.song.tracks.len(),
+            outcome.warnings.len(),
+            validate_warnings.len(),
+        );
+    }
+
+    let mut payload = json!({
+        "ok": true,
+        "input": abs_in.to_string_lossy(),
+        "output": abs_out.to_string_lossy(),
+        "source_format": outcome.source_format,
+        "ppq": outcome.ppq,
+        "track_count": outcome.song.tracks.len(),
+        "extensions_recovered": outcome.extensions_recovered,
+    });
+    if !outcome.warnings.is_empty() {
+        payload["warnings"] = json!(outcome.warnings);
+    }
+    if !validate_warnings.is_empty() {
+        payload["validate_warnings"] = json!(validate_warnings);
+    }
+    emit_json(&payload);
+    0
+}
+
+fn emit_midi_error(e: &MidiError) -> u8 {
+    let (code, exit, msg) = match e {
+        MidiError::FileNotFound(p) => (
+            "FILE_NOT_FOUND",
+            3_u8,
+            format!("MIDI file not found: {}", p.display()),
+        ),
+        MidiError::Io(io) => ("IO_ERROR", 3, format!("MIDI I/O error: {io}")),
+        MidiError::Parse(m) => ("MIDI_PARSE_FAILED", 1, format!("MIDI parse failed: {m}")),
+        MidiError::UnsupportedFormat(m) => (
+            "MIDI_UNSUPPORTED_FORMAT",
+            1,
+            format!("unsupported MIDI format: {m}"),
+        ),
+        MidiError::UnsupportedTiming => (
+            "MIDI_UNSUPPORTED_TIMING",
+            1,
+            "MIDI uses SMPTE timecode timing; only PPQ-based timing is supported".to_string(),
+        ),
+        MidiError::InvalidExtensions(m) => (
+            "MIDI_INVALID_EXTENSIONS",
+            1,
+            format!("invalid codetta extensions JSON: {m}"),
+        ),
+    };
+    emit_json(&json!({
+        "ok": false,
+        "errors": [{ "code": code, "message": msg }]
+    }));
+    exit
 }
 
 fn emit_migrate_error(e: &MigrateError) -> u8 {
