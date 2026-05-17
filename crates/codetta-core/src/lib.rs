@@ -24,8 +24,9 @@ pub use edit::{
 pub use error::{CodettaError, Severity, ValidationError};
 pub use io::{load, save};
 pub use midi::{
-    import_midi, ExtensionsMode, ExtensionsRecovered, MidiError, MidiImportOptions,
-    MidiImportOutcome, MidiImportWarning,
+    export_song, import_midi, ExtensionsMode, ExtensionsRecovered, MidiError, MidiExportOptions,
+    MidiExportOutcome, MidiExportWarning, MidiImportOptions, MidiImportOutcome, MidiImportWarning,
+    DEFAULT_PPQ,
 };
 pub use migrate::{
     migrate_song_json, InstrumentMapping, MigrateError, MigrateOutcome, MigrateWarning, DEFAULT_SF2,

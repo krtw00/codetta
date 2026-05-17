@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::midi::error::MidiError;
+use crate::model::Song;
 
 /// `--extensions` モード (CLI / MCP / lib 共通)。
 ///
@@ -108,6 +109,111 @@ pub(crate) fn load_sidecar(path: &Path) -> Result<Option<ExtensionsPayload>, Mid
     serde_json::from_slice::<ExtensionsPayload>(&bytes)
         .map(Some)
         .map_err(|e| MidiError::InvalidExtensions(e.to_string()))
+}
+
+/// Song から MIDI 拡張属性 payload を構築する (ADR L147-L183 の JSON shape)。
+///
+/// - `metadata`: master_gain (default 1.0 と一致しても常に書く: round-trip 一貫性のため)、
+///   key (Option)、 tags (空でなければ)
+/// - `tracks[]`: id / name / instrument / fx を書く。 並びは [`tracks_in_channel_order`] と同じ
+///   = channel index 昇順 (drum はその位置に挟まる)。
+/// - notes / volume / pan / mute / solo / bpm / time_signature は MIDI 側で表現するので含めない
+///   (ADR L192-L197)。
+pub(crate) fn build_text_meta_payload(song: &Song) -> ExtensionsPayload {
+    let metadata = ExtensionsMetadata {
+        master_gain: Some(song.metadata.master_gain),
+        key: song.metadata.key.clone(),
+        tags: song.metadata.tags.clone(),
+    };
+
+    let tracks_in_order = tracks_in_channel_order(song);
+    let tracks: Vec<ExtensionsTrack> = tracks_in_order
+        .iter()
+        .map(|t| {
+            let instrument = serde_json::to_value(&t.instrument).ok();
+            // fx 配列は serde で Vec<Effect> として再構成可。 空配列でも明示的に書いて
+            // import 側の「override あり」判定を確定的にする。
+            let fx = serde_json::to_value(&t.fx).ok();
+            ExtensionsTrack {
+                id: Some(t.id.clone()),
+                name: Some(t.name.clone()),
+                instrument,
+                fx,
+            }
+        })
+        .collect();
+
+    ExtensionsPayload {
+        codetta: ExtensionsRoot {
+            version: Some(crate::SCHEMA_VERSION.to_string()),
+            metadata: Some(metadata),
+            tracks,
+        },
+    }
+}
+
+/// payload を Text Meta Event 用の UTF-8 bytes に serialize する (改行なし、 単一行)。
+pub(crate) fn payload_to_text_meta_bytes(payload: &ExtensionsPayload) -> Vec<u8> {
+    // serde_json::to_vec は単一行、 ASCII 範囲。 ADR L143 (= 改行なし)。
+    serde_json::to_vec(payload).expect("ExtensionsPayload is always serializable")
+}
+
+/// sidecar JSON を書き出す (`<basename>.codetta.meta.json`)。
+/// 形式は text-meta と同一 (= `{ "codetta": { ... } }`)、 pretty 出力で人間が読みやすい形にする。
+pub(crate) fn save_sidecar(path: &Path, payload: &ExtensionsPayload) -> Result<(), MidiError> {
+    let mut bytes = serde_json::to_vec_pretty(payload)
+        .map_err(|e| MidiError::InvalidExtensions(e.to_string()))?;
+    bytes.push(b'\n');
+    std::fs::write(path, &bytes).map_err(MidiError::Io)
+}
+
+/// MIDI export の channel 割当順で `Song.tracks` を並べた参照列を返す。
+///
+/// ADR L60-L67 の規約に従う:
+/// - drum (= `instrument.params.bank == 128`) は ch10 (= idx 9) 固定
+/// - melodic は出現順に ch1, ch2, ..., ch9, ch11, ch12, ..., ch16
+///
+/// この関数は **割当順** に並べた `Vec<&Track>` を返すだけで、 channel 上限超過 (= 16 melodic 以上)
+/// や複数 drum の検出はしない (= caller = export 側で error を出す)。
+pub(crate) fn tracks_in_channel_order(song: &Song) -> Vec<&crate::model::Track> {
+    let mut melodic: Vec<&crate::model::Track> = Vec::new();
+    let mut drum: Option<&crate::model::Track> = None;
+    for t in &song.tracks {
+        if track_is_drum(t) {
+            // 複数あった場合は最後の 1 本を採用 (= 検証は export 側で別途)
+            drum = Some(t);
+        } else {
+            melodic.push(t);
+        }
+    }
+    // ADR L60: ch1, ch2, ..., ch9, [drum=ch10], ch11, ..., ch16 の順で並ぶ。
+    // melodic は出現順、 ch10 の位置に drum を挟む (= 9 番目)。
+    let mut out: Vec<&crate::model::Track> = Vec::with_capacity(song.tracks.len());
+    for (i, t) in melodic.into_iter().enumerate() {
+        if i == 9 {
+            if let Some(d) = drum.take() {
+                out.push(d);
+            }
+        }
+        out.push(t);
+    }
+    // melodic が 9 未満で終わった場合 (= drum が後ろに残る) は末尾に追加
+    if let Some(d) = drum {
+        out.push(d);
+    }
+    out
+}
+
+/// `instrument.params.bank == 128` を持つ track を drum とみなす。
+/// bank が無い / 数値でない場合は melodic 扱い。
+pub(crate) fn track_is_drum(track: &crate::model::Track) -> bool {
+    track
+        .instrument
+        .params
+        .get("bank")
+        .and_then(|v| v.as_u64())
+        .map(|n| n == 128)
+        .unwrap_or(false)
 }
 
 #[cfg(test)]

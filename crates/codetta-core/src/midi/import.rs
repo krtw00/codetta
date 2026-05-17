@@ -302,28 +302,26 @@ pub fn import_midi(
         .clone()
         .unwrap_or_else(|| DEFAULT_SF2.to_string());
 
-    let sf2_preset_set: Option<std::collections::HashSet<(u16, u16)>> = match options
-        .sf2_file
-        .as_deref()
-    {
-        None => None,
-        Some(f) => {
-            let resolved = resolve_soundfont_path(f);
-            match list_soundfont_presets(&resolved) {
-                Ok((_, presets)) => Some(presets.iter().map(|p| (p.bank, p.preset)).collect()),
-                Err(_) => {
-                    warnings.push(MidiImportWarning {
-                        code: "SOUNDFONT_UNAVAILABLE",
-                        channel: None,
-                        message: format!(
+    let sf2_preset_set: Option<std::collections::HashSet<(u16, u16)>> =
+        match options.sf2_file.as_deref() {
+            None => None,
+            Some(f) => {
+                let resolved = resolve_soundfont_path(f);
+                match list_soundfont_presets(&resolved) {
+                    Ok((_, presets)) => Some(presets.iter().map(|p| (p.bank, p.preset)).collect()),
+                    Err(_) => {
+                        warnings.push(MidiImportWarning {
+                            code: "SOUNDFONT_UNAVAILABLE",
+                            channel: None,
+                            message: format!(
                             "SF2 file {f:?} could not be loaded; skipping preset existence check"
                         ),
-                    });
-                    None
+                        });
+                        None
+                    }
                 }
             }
-        }
-    };
+        };
 
     let mut tracks: Vec<Track> = Vec::new();
     for (idx, st) in channels.iter().enumerate() {

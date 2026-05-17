@@ -11,7 +11,7 @@ use std::process::ExitCode;
 use clap::{ArgGroup, Args, Parser, Subcommand};
 use codetta_core::{
     self as core,
-    midi::{ExtensionsMode, MidiError, MidiImportOptions},
+    midi::{ExtensionsMode, MidiError, MidiExportOptions, MidiImportOptions, DEFAULT_PPQ},
     migrate::{MigrateError, DEFAULT_SF2},
     synth::soundfont::{list_soundfont_presets, resolve_soundfont_path, SoundFontError},
     CodettaError, Effect, Instrument, Note, NoteOp, Song, Track, ValidationError, KNOWN_DRUM_KEYS,
@@ -83,6 +83,8 @@ enum Command {
     Migrate(MigrateArgs),
     /// 標準 MIDI ファイル (.mid) を `.codetta` (0.2) に取り込む
     ImportMidi(ImportMidiArgs),
+    /// `.codetta` を標準 MIDI ファイル (.mid、 SMF Type 1) に書き出す
+    ExportMidi(ExportMidiArgs),
 }
 
 #[derive(Args)]
@@ -275,6 +277,27 @@ struct MigrateArgs {
 }
 
 #[derive(Args)]
+struct ExportMidiArgs {
+    /// 入力 `.codetta` ファイル (schema 0.2、 0.1 は in-memory migrate で 0.2 化してから出力)
+    path: PathBuf,
+    /// 出力 `.mid` ファイル
+    #[arg(short, long)]
+    output: PathBuf,
+    /// 拡張属性 (master_gain / fx / SF2 preset 詳細) の書き出しモード
+    #[arg(long, value_parser = parse_extensions_mode, default_value = "text-meta")]
+    extensions: ExtensionsMode,
+    /// PPQ (ticks per quarter)。 default 480 (ADR L43)
+    #[arg(long, default_value_t = DEFAULT_PPQ)]
+    ppq: u16,
+    /// 0.1 入力の in-memory migrate 時に soundfont params.file に書き込む SF2 ファイル名
+    #[arg(long, default_value = DEFAULT_SF2)]
+    sf2: String,
+    /// 既存 `.mid` を上書き
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Args)]
 struct ImportMidiArgs {
     /// 入力 `.mid` ファイル
     path: PathBuf,
@@ -344,6 +367,7 @@ fn main() -> ExitCode {
         Command::Schema => cmd_schema(),
         Command::Migrate(a) => cmd_migrate(a, &cli.common),
         Command::ImportMidi(a) => cmd_import_midi(a, &cli.common),
+        Command::ExportMidi(a) => cmd_export_midi(a, &cli.common),
     };
     ExitCode::from(exit)
 }
@@ -1078,34 +1102,206 @@ fn cmd_import_midi(args: ImportMidiArgs, common: &CommonOpts) -> u8 {
     0
 }
 
+fn cmd_export_midi(args: ExportMidiArgs, common: &CommonOpts) -> u8 {
+    if args.output.exists() && !args.force {
+        return emit_error(&CodettaError::FileExists(args.output.clone()));
+    }
+
+    // 0.1 入力は in-memory migrate を挟む (ADR L273)。 io::load は SUPPORTED_VERSIONS=["0.2"]
+    // で 0.1 を弾くので、 raw JSON で読んで version を見る。
+    let bytes = match std::fs::read(&args.path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return emit_error(&CodettaError::FileNotFound(args.path.clone()));
+        }
+        Err(e) => return emit_error(&CodettaError::Io(e)),
+    };
+    let raw: Value = match serde_json::from_slice(&bytes) {
+        Ok(v) => v,
+        Err(e) => return emit_error(&CodettaError::InvalidJson(e)),
+    };
+
+    let raw_version = raw
+        .get("version")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    let (song_json, migrate_summary): (Value, Option<Value>) = if raw_version == "0.1" {
+        match core::migrate_song_json(&raw, Some(&args.sf2)) {
+            Ok(outcome) => {
+                let summary = json!({
+                    "from_version": outcome.from_version,
+                    "to_version": outcome.to_version,
+                    "tracks_migrated": outcome.tracks_migrated,
+                    "instrument_mapping": outcome.instrument_mapping,
+                    "warnings": outcome.warnings,
+                });
+                if !common.quiet {
+                    eprintln!(
+                        "[INFO] Implicit migrate 0.1 -> 0.2 (in-memory, {} track(s) migrated)",
+                        outcome.tracks_migrated
+                    );
+                }
+                (outcome.song, Some(summary))
+            }
+            Err(e) => return emit_migrate_error(&e),
+        }
+    } else {
+        (raw, None)
+    };
+
+    let song: Song = match serde_json::from_value(song_json) {
+        Ok(s) => s,
+        Err(e) => return emit_error(&CodettaError::InvalidJson(e)),
+    };
+
+    // ADR L350: MIDI export 経路では `validate` を強制しない。
+    // - SF2 file の物理存在 (= SOUNDFONT_FILE_NOT_FOUND) は MIDI 出力に無関係
+    //   (= GM Program 番号さえあれば外部 DAW で別 SF2 に再 mapping できる)
+    // - 構造健全性 (instrument が soundfont か / preset / pitch / bpm 等) は
+    //   `export_song` 内部で必要な範囲だけ自前 check し、 不正は MidiError として返す。
+
+    if !common.quiet {
+        eprintln!(
+            "[INFO] Exporting {} -> {} (ppq={}, extensions={})",
+            args.path.display(),
+            args.output.display(),
+            args.ppq,
+            args.extensions.as_str(),
+        );
+    }
+
+    let options = MidiExportOptions {
+        extensions: args.extensions,
+        ppq: args.ppq,
+    };
+    let outcome = match core::export_song(&song, &args.output, &options) {
+        Ok(o) => o,
+        Err(e) => return emit_midi_error(&e),
+    };
+
+    let abs_in = std::fs::canonicalize(&args.path).unwrap_or_else(|_| args.path.clone());
+    let abs_out = std::fs::canonicalize(&args.output).unwrap_or_else(|_| args.output.clone());
+
+    if !common.quiet {
+        let sidecar_tail = match &outcome.sidecar_written {
+            Some(p) => format!(", sidecar={}", p.display()),
+            None => String::new(),
+        };
+        eprintln!(
+            "[OK] Exported {} -> {} ({}, {} track(s), text_meta={}{})",
+            abs_in.display(),
+            abs_out.display(),
+            outcome.format,
+            outcome.track_count,
+            outcome.text_meta_written,
+            sidecar_tail,
+        );
+    }
+
+    let mut payload = json!({
+        "ok": true,
+        "input": abs_in.to_string_lossy(),
+        "output": abs_out.to_string_lossy(),
+        "format": outcome.format,
+        "ppq": outcome.ppq,
+        "track_count": outcome.track_count,
+        "text_meta_written": outcome.text_meta_written,
+    });
+    if let Some(sidecar) = &outcome.sidecar_written {
+        payload["sidecar"] = json!(sidecar.to_string_lossy());
+    }
+    if !outcome.warnings.is_empty() {
+        payload["warnings"] = json!(outcome.warnings);
+    }
+    if let Some(summary) = migrate_summary {
+        payload["implicit_migrate"] = summary;
+    }
+    emit_json(&payload);
+    0
+}
+
 fn emit_midi_error(e: &MidiError) -> u8 {
-    let (code, exit, msg) = match e {
+    let (code, exit, msg, context) = match e {
         MidiError::FileNotFound(p) => (
             "FILE_NOT_FOUND",
             3_u8,
             format!("MIDI file not found: {}", p.display()),
+            None,
         ),
-        MidiError::Io(io) => ("IO_ERROR", 3, format!("MIDI I/O error: {io}")),
-        MidiError::Parse(m) => ("MIDI_PARSE_FAILED", 1, format!("MIDI parse failed: {m}")),
+        MidiError::Io(io) => ("IO_ERROR", 3, format!("MIDI I/O error: {io}"), None),
+        MidiError::Parse(m) => (
+            "MIDI_PARSE_FAILED",
+            1,
+            format!("MIDI parse failed: {m}"),
+            None,
+        ),
         MidiError::UnsupportedFormat(m) => (
             "MIDI_UNSUPPORTED_FORMAT",
             1,
             format!("unsupported MIDI format: {m}"),
+            None,
         ),
         MidiError::UnsupportedTiming => (
             "MIDI_UNSUPPORTED_TIMING",
             1,
             "MIDI uses SMPTE timecode timing; only PPQ-based timing is supported".to_string(),
+            None,
         ),
         MidiError::InvalidExtensions(m) => (
             "MIDI_INVALID_EXTENSIONS",
             1,
             format!("invalid codetta extensions JSON: {m}"),
+            None,
+        ),
+        MidiError::TrackLimitExceeded(ids) => (
+            "MIDI_TRACK_LIMIT_EXCEEDED",
+            1,
+            format!(
+                "song has more melodic tracks than MIDI channels allow (15 melodic + 1 drum); \
+                 excess tracks: {ids:?}. Reduce tracks or consolidate via set-instrument."
+            ),
+            Some(json!({ "excess_track_ids": ids })),
+        ),
+        MidiError::MultipleDrumTracksNotSupported(ids) => (
+            "MIDI_MULTIPLE_DRUM_TRACKS",
+            1,
+            format!(
+                "more than one drum track (bank=128) found; MIDI ch10 supports only one drum track. \
+                 Drum track ids: {ids:?}"
+            ),
+            Some(json!({ "drum_track_ids": ids })),
+        ),
+        MidiError::InvalidNotePitch { track_id, reason } => (
+            "MIDI_INVALID_NOTE_PITCH",
+            1,
+            format!("track {track_id:?}: {reason}"),
+            Some(json!({ "track_id": track_id })),
+        ),
+        MidiError::UnsupportedInstrumentType { track_id, kind } => (
+            "MIDI_UNSUPPORTED_INSTRUMENT",
+            1,
+            format!(
+                "track {track_id:?} has instrument type {kind:?}; export expects 'soundfont' \
+                 (schema 0.2). Run `codetta migrate` first if this is a 0.1 file."
+            ),
+            Some(json!({ "track_id": track_id, "instrument_type": kind })),
+        ),
+        MidiError::InvalidSoundFontParams { track_id, reason } => (
+            "MIDI_INVALID_SOUNDFONT_PARAMS",
+            1,
+            format!("track {track_id:?}: {reason}"),
+            Some(json!({ "track_id": track_id })),
         ),
     };
+    let mut err_obj = json!({ "code": code, "message": msg });
+    if let Some(ctx) = context {
+        err_obj["context"] = ctx;
+    }
     emit_json(&json!({
         "ok": false,
-        "errors": [{ "code": code, "message": msg }]
+        "errors": [err_obj]
     }));
     exit
 }

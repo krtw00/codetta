@@ -430,6 +430,66 @@ export function registerTools(server: McpServer): void {
     },
   );
 
+  // ----- export_midi -----
+  server.registerTool(
+    "export_midi",
+    {
+      title: "Export a .codetta to standard MIDI (.mid, SMF Type 1)",
+      description:
+        "`.codetta` を SMF Type 1 (multi-track) として書き出す。 channel ↔ track は 1:1、 drum (bank=128) は ch10 固定。 melodic は最大 15 track、 drum は 1 track のみ (超過は MIDI_TRACK_LIMIT_EXCEEDED / MIDI_MULTIPLE_DRUM_TRACKS エラー)。 拡張属性 (master_gain / fx / SF2 preset 詳細) は `extensions` モードで書き出す: `text-meta` (default、 MTrk 0 先頭の Text Meta に JSON inline) / `sidecar` (`<basename>.codetta.meta.json`) / `none` (純粋 GM 互換)。 0.1 入力は in-memory migrate で 0.2 化してから export (= 結果は `implicit_migrate` field に summary)。 ADR: docs/design/08-midi.md",
+      inputSchema: {
+        path: z
+          .string()
+          .describe("入力 .codetta ファイル。 相対パスなら $CODETTA_WORKSPACE 配下"),
+        output: z
+          .string()
+          .describe("出力 .mid ファイル。 相対パスなら $CODETTA_WORKSPACE 配下"),
+        extensions: z
+          .enum(["text-meta", "sidecar", "none"])
+          .optional()
+          .describe(
+            "拡張属性の書き出しモード (default: 'text-meta')",
+          ),
+        ppq: z
+          .number()
+          .int()
+          .min(1)
+          .max(32767)
+          .optional()
+          .describe("PPQ (ticks per quarter)。 default 480 (ADR L43)"),
+        sf2_file: z
+          .string()
+          .optional()
+          .describe(
+            "0.1 入力の in-memory migrate 時に soundfont params.file に書き込む SF2 ファイル名 (省略時は default SF2 = GeneralUser-GS-v1.471.sf2)。 0.2 入力では使用されない",
+          ),
+        overwrite: z
+          .boolean()
+          .optional()
+          .describe("既存 .mid を上書き (default false)"),
+      },
+    },
+    async (input) => {
+      const inPath = resolveSongPath(input.path);
+      const outPath = resolveSongPath(input.output);
+      const args = ["export-midi", inPath, "-o", outPath];
+      if (input.extensions !== undefined) {
+        pushOpt(args, "--extensions", input.extensions);
+      }
+      if (input.ppq !== undefined) {
+        pushOpt(args, "--ppq", String(input.ppq));
+      }
+      if (input.sf2_file !== undefined) {
+        pushOpt(args, "--sf2", input.sf2_file);
+      }
+      if (input.overwrite === true) {
+        args.push("--force");
+      }
+      const result = await runCliAsToolResult(args);
+      return jsonContent(result);
+    },
+  );
+
   // ----- set_instrument -----
   server.registerTool(
     "set_instrument",
