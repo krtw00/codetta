@@ -25,3 +25,6 @@ dist/
 # Local sessions (CLAUDE.md ルール: 個人参照のみ)
 HANDOFF.md
 docs/sessions/
+
+# Workspace (CODETTA_WORKSPACE は repo 外を指す前提、 万一 repo 内に作っても commit させない)
+workspace/
