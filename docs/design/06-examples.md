@@ -238,5 +238,5 @@ CLI 操作例 (Phase 1+ 現役 fixture 向け):
 - [03-cli.md](03-cli.md) — CLI subcommand 仕様 (migrate LUT)
 - [04-mcp.md](04-mcp.md) — MCP tool 仕様
 - [07-soundfont.md](07-soundfont.md) — SF2 統合の詳細仕様 (= メイン音源 doc)
-- 08-midi.md — MIDI import/export (Phase 3 で起こす)
+- [08-midi.md](08-midi.md) — MIDI import/export (= Phase 3 ADR、 確定済)
 - 09-distribution.md — 配布戦略 (Phase 4 で起こす)

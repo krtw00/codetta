@@ -415,8 +415,8 @@ DSP ライブラリ `fundsp` を採用するかプロトタイプ比較した結
 新規 (= 次以降のマイルストーンで決定):
 
 - [ ] **bundle SF2 の配布手段**: binary 埋め込み (`include_bytes!`) / `cargo install` 時 DL / homebrew formula 経由 / GitHub Release `.tar.gz` 同梱、 のどれにするか → Phase 4 (= 09-distribution.md で詰める)
-- [ ] **MIDI 拡張属性の往復維持戦略**: codetta 拡張属性 (`master_gain` / fx / SF2 preset/bank 詳細) を MIDI 経由でどう保持するか。 MIDI Text Meta Event 埋め込み案 vs sidecar JSON 案 → Phase 3 (= 08-midi.md で詰める)
-- [ ] **import 時の GM program → SF2 preset 自動マッピング**: SF2 必須前提でも program 番号と preset 番号は完全一致しないケースがある → 08-midi.md で詰める
+- [x] **MIDI 拡張属性の往復維持戦略** → [08-midi.md](08-midi.md) で確定 (= `MTrk` 0 先頭の Text Meta Event に JSON inline、 default `text-meta` モード、 sidecar / none は optional)
+- [x] **import 時の GM program → SF2 preset 自動マッピング** → [08-midi.md](08-midi.md) で確定 (= melodic は同番号採用、 SF2 に preset 無し時は preset 0 fallback + warning)
 - [ ] **GUI フレームワーク選定**: egui / Tauri / Dioxus → Phase 5 開始時に再評価
 
 決着済 (履歴として):
@@ -436,5 +436,5 @@ DSP ライブラリ `fundsp` を採用するかプロトタイプ比較した結
 - [04-mcp.md](04-mcp.md) — MCP tool 仕様
 - [06-examples.md](06-examples.md) — サンプル `.codetta`
 - [07-soundfont.md](07-soundfont.md) — SoundFont 経路の詳細
-- 08-midi.md — MIDI import/export (Phase 3 で起こす)
+- [08-midi.md](08-midi.md) — MIDI import/export (= Phase 3 ADR、 確定済)
 - 09-distribution.md — 配布戦略 (Phase 4 で起こす)

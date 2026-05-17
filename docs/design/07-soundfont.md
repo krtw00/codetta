@@ -270,5 +270,5 @@ codetta list-soundfont-presets GeneralUser-GS-v1.471.sf2 | jq '.presets[] | sele
 - [03-cli.md](03-cli.md) — CLI subcommand (`list-soundfont-presets` / `migrate` LUT)
 - [04-mcp.md](04-mcp.md) — MCP tool (`list_soundfont_presets` / `migrate_song`)
 - [06-examples.md](06-examples.md) — サンプル `.codetta` (Phase 2 SF2 化計画)
-- 08-midi.md — MIDI import/export (Phase 3 で起こす)
+- [08-midi.md](08-midi.md) — MIDI import/export (= Phase 3 ADR、 確定済)
 - 09-distribution.md — 配布戦略 (Phase 4 で起こす、 bundle SF2 配布手段の選定はここ)

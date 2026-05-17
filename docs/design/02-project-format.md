@@ -353,7 +353,7 @@ CLI / Core は以下を検証する:
 
 | 機能 | 追加場所 | 想定 Phase |
 |---|---|---|
-| MIDI import で取り込んだ拡張属性 (`master_gain` / fx / SF2 preset/bank) を MIDI に往復維持 | Text Meta Event 埋め込み or sidecar JSON | Phase 3 (= 08-midi.md で詰める) |
+| MIDI import で取り込んだ拡張属性 (`master_gain` / fx / SF2 preset/bank) を MIDI に往復維持 | Text Meta Event 埋め込み or sidecar JSON | Phase 3 (= [08-midi.md](08-midi.md) で確定、 `text-meta` を default) |
 | パターン (ループ可能な単位の再利用) | `patterns[]` トップレベル + `tracks[].pattern_refs[]` | Phase 5+ |
 | 自動化 (volume / pan のオートメーション) | `tracks[].automation[]` | Phase 5+ |
 | テンポトラック (BPM 変化) | `metadata.bpm` を `tempo_track[]` に拡張 | Phase 5+ |
@@ -385,5 +385,5 @@ CLI / Core は以下を検証する:
 - [04-mcp.md](04-mcp.md) — MCP tool 仕様
 - [06-examples.md](06-examples.md) — サンプル `.codetta`
 - [07-soundfont.md](07-soundfont.md) — SF2 統合の詳細仕様 (= メイン音源 doc)
-- 08-midi.md — MIDI import/export (Phase 3 で起こす)
+- [08-midi.md](08-midi.md) — MIDI import/export (= Phase 3 ADR、 確定済)
 - 09-distribution.md — 配布戦略 (Phase 4 で起こす)
