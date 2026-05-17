@@ -22,10 +22,10 @@ use rustysynth::SoundFont;
 
 use crate::effect;
 use crate::error::CodettaError;
-use crate::model::{Effect, Song};
+use crate::model::{Effect, Pitch, Song};
 use crate::synth::soundfont::{
-    load_soundfont, render_soundfont_track_with, resolve_soundfont_path, SoundFontParams,
-    SoundFontTrackNote, SoundFontTrackRender,
+    drum_key_to_midi, load_soundfont, render_soundfont_track_with, resolve_soundfont_path,
+    SoundFontParams, SoundFontTrackNote, SoundFontTrackRender, DRUM_BANK,
 };
 use crate::synth::{manual, midi_to_freq, AdsrParams, SAMPLE_RATE};
 
@@ -107,11 +107,19 @@ pub fn render_to_buffer(song: &Song) -> Vec<(f32, f32)> {
                     }
                 },
             };
+            // bank=128 = GM Drum kit。 pitch が drum 要素名キー (kick 等) なら GM MIDI 番号に
+            // 正規化し、 通常のノート名 / MIDI 番号との混在も受け付ける (02-project-format.md L175)。
+            let is_drum_track = sf_params.bank == DRUM_BANK;
             let mut notes: Vec<SoundFontTrackNote> = track
                 .notes
                 .iter()
                 .filter_map(|n| {
-                    let midi = n.pitch.as_midi().ok()?;
+                    let midi = match (is_drum_track, &n.pitch) {
+                        (true, Pitch::Name(s)) => {
+                            drum_key_to_midi(s).or_else(|| n.pitch.as_midi().ok())?
+                        }
+                        _ => n.pitch.as_midi().ok()?,
+                    };
                     let start = (n.t * sec_per_beat * sr) as usize;
                     let end_beat = n.t + n.dur;
                     let end = (end_beat * sec_per_beat * sr) as usize;
@@ -860,6 +868,46 @@ mod tests {
         assert!(
             peak > 0.01,
             "SF2 render should produce audible output, got {peak}"
+        );
+    }
+
+    #[test]
+    fn sf2_drum_track_resolves_drum_key_to_midi() {
+        // bank=128 + Pitch::Name("kick") が GM Drum MIDI 36 に正規化されることを、
+        // 「audible な出力が出ること」 で確認する。 SF2 が無い CI では skip。
+        let Some(sf2) = std::env::var("CODETTA_TEST_SF2").ok() else {
+            eprintln!("CODETTA_TEST_SF2 not set — skipping SF2 drum key resolution test");
+            return;
+        };
+        let mut s = Song::new("drum-test", 120, None);
+        let mut inst = Instrument::new("soundfont");
+        inst.params.insert("file".into(), serde_json::json!(sf2));
+        inst.params.insert("preset".into(), serde_json::json!(0));
+        inst.params.insert("bank".into(), serde_json::json!(128));
+        s.tracks.push(Track {
+            id: "drums".into(),
+            name: "Drums".into(),
+            instrument: inst,
+            volume: 0.8,
+            pan: 0.0,
+            mute: false,
+            solo: false,
+            fx: vec![],
+            notes: vec![Note {
+                t: 0.0,
+                pitch: Pitch::Name("kick".into()),
+                dur: 0.2,
+                vel: 110,
+            }],
+        });
+        let buf = render_to_buffer(&s);
+        let peak = buf
+            .iter()
+            .map(|(l, r)| l.abs().max(r.abs()))
+            .fold(0.0_f32, f32::max);
+        assert!(
+            peak > 0.01,
+            "drum 要素名キーは bank=128 で GM MIDI 36 (kick) に正規化されて audible になるはず: peak={peak}"
         );
     }
 

@@ -13,6 +13,49 @@ use rustysynth::{SoundFont, Synthesizer, SynthesizerSettings};
 use serde_json::{Map, Value};
 use thiserror::Error;
 
+/// GM Drum (bank 128) の SF2 経路で扱う「要素名キー → MIDI 番号」 マップ。
+///
+/// LLM フレンドリーのため `pitch: "kick"` のような要素名で書ける糖衣表現を
+/// SF2 経路 (= bank 128 track) で MIDI 番号に正規化する。
+/// 02-project-format.md / 07-soundfont.md の正本。
+pub const DRUM_KEY_MIDI_MAP: &[(&str, u8)] = &[
+    ("kick", 36),
+    ("snare", 38),
+    ("clap", 39),
+    ("tom_lo", 41),
+    ("hh_closed", 42),
+    ("hh_open", 46),
+    ("tom_mid", 47),
+    ("crash", 49),
+    ("tom_hi", 50),
+    ("ride", 51),
+];
+
+/// `DRUM_KEY_MIDI_MAP` のキーのみ。 validate / catalog で使う。
+pub const KNOWN_DRUM_KEYS: &[&str] = &[
+    "kick",
+    "snare",
+    "clap",
+    "tom_lo",
+    "hh_closed",
+    "hh_open",
+    "tom_mid",
+    "crash",
+    "tom_hi",
+    "ride",
+];
+
+/// drum 要素名キーを GM Drum MIDI 番号に変換する。 未知キーは `None`。
+pub fn drum_key_to_midi(key: &str) -> Option<u8> {
+    DRUM_KEY_MIDI_MAP
+        .iter()
+        .find(|(k, _)| *k == key)
+        .map(|(_, n)| *n)
+}
+
+/// SF2 の drum bank (GM/GS 規約)。 bank 128 を drum kit として扱う。
+pub const DRUM_BANK: u16 = 128;
+
 /// `Instrument::SoundFont` の params (`file` / `preset` / `bank`)。
 ///
 /// `from_params` で JSON Map から取り出し、 `validate` で各値の妥当性を検査する。
@@ -403,6 +446,36 @@ mod tests {
 
     fn sf2_from_env() -> Option<PathBuf> {
         std::env::var("CODETTA_TEST_SF2").ok().map(PathBuf::from)
+    }
+
+    #[test]
+    fn drum_key_to_midi_all_known_keys() {
+        // ADR (02-project-format.md / 07-soundfont.md) で定義された GM Drum マップを正本として
+        // 全 10 entry が想定通り変換されるか確認。
+        assert_eq!(drum_key_to_midi("kick"), Some(36));
+        assert_eq!(drum_key_to_midi("snare"), Some(38));
+        assert_eq!(drum_key_to_midi("clap"), Some(39));
+        assert_eq!(drum_key_to_midi("tom_lo"), Some(41));
+        assert_eq!(drum_key_to_midi("hh_closed"), Some(42));
+        assert_eq!(drum_key_to_midi("hh_open"), Some(46));
+        assert_eq!(drum_key_to_midi("tom_mid"), Some(47));
+        assert_eq!(drum_key_to_midi("crash"), Some(49));
+        assert_eq!(drum_key_to_midi("tom_hi"), Some(50));
+        assert_eq!(drum_key_to_midi("ride"), Some(51));
+    }
+
+    #[test]
+    fn drum_key_to_midi_unknown_returns_none() {
+        assert_eq!(drum_key_to_midi("zap"), None);
+        assert_eq!(drum_key_to_midi(""), None);
+        assert_eq!(drum_key_to_midi("C4"), None);
+    }
+
+    #[test]
+    fn drum_key_map_and_known_keys_are_aligned() {
+        // `DRUM_KEY_MIDI_MAP` のキー集合と `KNOWN_DRUM_KEYS` が完全一致することを保証。
+        let map_keys: Vec<&str> = DRUM_KEY_MIDI_MAP.iter().map(|(k, _)| *k).collect();
+        assert_eq!(map_keys, KNOWN_DRUM_KEYS);
     }
 
     #[test]

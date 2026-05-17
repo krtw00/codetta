@@ -14,7 +14,7 @@
 | `Instrument::SoundFont` の render path | ✅ 実装済 (= `synth::soundfont::render_soundfont_track`) | 同じ |
 | `Arc<SoundFont>` キャッシュ (load 重複回避) | ✅ 実装済 (`load_soundfont` 戻り値) | 同じ |
 | `list-soundfont-presets` / `codetta://soundfonts/{name}` resource | ✅ 実装済 | 同じ |
-| ドラム track での `pitch: "kick"` 等 (SF2 経路) | 未実装 (= 内蔵 `drum_kit` track 経由のみ) | SF2 bank 128 track でも要素名キーを GM Drum MIDI 番号 (36/38/42...) に正規化 |
+| ドラム track での `pitch: "kick"` 等 (SF2 経路) | ✅ 実装済 (CDT-5) — SF2 + bank=128 で要素名キー / MIDI 番号 / ノート名表記 のいずれも受付 | 同左 (CDT-5 で実装完了) |
 | `migrate` (CDT-6) | ✅ 実装済 — 0.1 → 0.2 LUT 変換 (内蔵 synth → SF2 preset) | 内蔵 synth 撤去 (CDT-7) で本表からは外れる |
 | bundle 配布 SF2 | 未実装 | Phase 4 で `GeneralUser-GS-v2.0.3.sf2` (約 30MB) を同梱 (= 09-distribution.md で確定) |
 
@@ -44,7 +44,6 @@
 | マイルストーン | 内容 | Phase |
 |---|---|---|
 | 内蔵 synth コード削除 + schema 0.2 化 (CDT-7) | `synth/manual.rs` 削除、 `KNOWN_INSTRUMENT_TYPES` を `soundfont` 1 種に縮退、 `render` の dispatch から内蔵 synth 分岐削除、 `Instrument::DrumKit` 廃止、 `validate` 更新、 `instrument_catalog()` を soundfont 1 entry に、 既存 fixture / test を SF2 版に書き換え。 `migrate` subcommand 自体は CDT-6 で先行実装済 (LUT 詳細は 03-cli.md) | 2 |
-| ドラム track の SF2 経路で `pitch: "kick"` 解釈 | SF2 bank 128 track 限定で drum 要素名キー → GM Drum MIDI 番号 (36/38/42/46/39/49/51/41/47/50) に正規化、 `render` と `validate` 両方に組み込み | 2 |
 | MIDI import / export | GM Program → SF2 preset マッピング、 ドラム channel 10 → bank 128、 拡張属性 (`master_gain` / fx / SF2 preset 詳細) の Text Meta Event 埋め込み or sidecar JSON 往復 | 3 |
 | bundle SF2 配布 | 配布バイナリに `GeneralUser-GS-v2.0.3.sf2` を bundle (= 配布手段は build.rs / include_bytes! / cargo install hook 等から 09-distribution.md で選定)、 README に DL 不要記載 | 4 |
 | README に SF2 download 手順 (bundle 未取得時 fallback) | bundle 取得失敗時 / ソースビルド時のために、 推奨 OSS SF2 一覧と DL 手順を README に追加 | 4 |
@@ -206,7 +205,6 @@ GeneralUser GS / GM 互換 SF2 で頻用する preset 一覧。 02 / 03 / 06 で
 - **メモリ使用量**: 大きい SF2 (~150MB の FluidR3_GM 等) を load した場合のヘッドルームは未測定。 同一 SF2 を複数 track で参照する場合は `Arc<SoundFont>` キャッシュで重複 load 回避済
 - **音色切替の cost**: 同一 SF2 内で preset を切替えるのは `process_midi_message(channel, 0xC0, program, 0)` で軽量 (cf. SF2 load 自体は重い)
 - **同時刻 note の event 順**: `start_sample` 同点なら off → on の順で sort (= レガート的に渡るが楽譜的には厳密でない)。 厳密性が要れば note `id` 等で決定論的順序を入れる
-- **drum 要素名キー Phase 2 実装の互換戦略**: SF2 経路で `kick`/`snare`/... を解釈するロジック追加時に、 既存 `drum_kit` instrument 経路 (Phase 1+) との二重実装期間をどう扱うか (= 同 commit で `drum_kit` 削除するか、 二段階で deprecate するか) → Phase 2 着手時に確定
 
 ## 検証方法
 
@@ -250,7 +248,6 @@ codetta list-soundfont-presets GeneralUser-GS-v1.471.sf2 | jq '.presets[] | sele
 
 - [ ] bundle SF2 配布手段 (= binary 埋め込み `include_bytes!` / `cargo install` 時 DL / homebrew formula 経由 / GitHub Release `.tar.gz` 同梱) のどれにするか → Phase 4 (09-distribution.md で確定)
 - [ ] bundle SF2 の version を v1.471 (現 dogfood) と v2.0.3 (= license / 動作両面で最新) のどちらに固定するか → Phase 4 で実機検証して決定。 doc では「v2.0.3」 を仮置きしている
-- [ ] drum 要素名キー Phase 2 実装の互換戦略 (= 二段階 deprecate or 同 commit 一括) → Phase 2 着手時に確定
 - [ ] GUI (Phase 5) で SF2 を audio thread で持つときの lock-free 戦略 (= `Arc<SoundFont>` を audio thread に渡す + GUI thread から preset 切替 を `process_midi_message` で投げる構造) の詳細設計 → Phase 5 開始時に詰める
 - [ ] ユーザーが SF2 を差替えた時のキャッシュ invalidation (= 同 path で内容変わった場合の検知) → 当面 PID lifetime キャッシュなので問題化したら検討
 
@@ -262,6 +259,7 @@ codetta list-soundfont-presets GeneralUser-GS-v1.471.sf2 | jq '.presets[] | sele
 - [x] SF2 を bundle するか / 都度 download か → **bundle 同梱** (Phase 4)、 ユーザー差替 (= `file` 指定) も引き続き可
 - [x] 内蔵 synth を残すか SF2 一本化するか → **SF2 一本化** (= schema 0.2 化で内蔵 synth 削除)
 - [x] ドラムを内蔵 `drum_kit` で持つか SF2 GM Drum で解決するか → **SF2 GM Drum (bank 128)**、 ただし要素名キー (kick/snare 等) は LLM フレンドリーのため維持
+- [x] drum 要素名キー Phase 2 実装の互換戦略 → **CDT-5 で実装、 CDT-7 で `drum_kit` を削除する 2 step で進める**。 SF2 経路の正本 LUT (`synth::soundfont::DRUM_KEY_MIDI_MAP`) を CDT-5 で導入、 内蔵 `drum_kit` 経路は CDT-7 で削除。 期間中は両経路共存だが、 LUT は SF2 側に正本化済 (= validate / render が同じ const を参照する)
 
 ## 関連ドキュメント
 

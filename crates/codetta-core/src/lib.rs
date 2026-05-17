@@ -27,7 +27,8 @@ pub use migrate::{
 };
 pub use model::{Effect, Instrument, Metadata, Note, Pitch, Song, Track};
 pub use render::{render_to_buffer, render_to_wav, RenderStats};
-pub use validate::{validate, KNOWN_DRUM_KEYS, KNOWN_EFFECT_TYPES, KNOWN_INSTRUMENT_TYPES};
+pub use synth::soundfont::KNOWN_DRUM_KEYS;
+pub use validate::{validate, KNOWN_EFFECT_TYPES, KNOWN_INSTRUMENT_TYPES};
 
 /// 現バージョンで書き出すスキーマバージョン。 0.1 据置 (CDT-7 で 0.2 完全移行予定)。
 pub const SCHEMA_VERSION: &str = "0.1";
