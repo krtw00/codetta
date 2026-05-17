@@ -1,39 +1,122 @@
 {
-  "version": "0.1",
+  "version": "0.2",
   "metadata": {
     "name": "Preset: wide_pad",
     "bpm": 100,
     "key": "Am",
-    "time_signature": [4, 4],
-    "tags": ["preset", "cyber", "pad"]
+    "time_signature": [
+      4,
+      4
+    ],
+    "master_gain": 2.0,
+    "tags": [
+      "preset",
+      "cyber",
+      "pad"
+    ]
   },
   "tracks": [
     {
       "id": "pad",
       "name": "Wide Pad",
       "instrument": {
-        "type": "saw_pad",
-        "params": { "attack": 0.5, "decay": 0.3, "sustain": 0.6, "release": 1.0, "detune_cents": 15 }
+        "type": "soundfont",
+        "params": {
+          "bank": 0,
+          "file": "GeneralUser-GS-v1.471.sf2",
+          "preset": 88
+        }
       },
       "volume": 0.55,
       "pan": 0.0,
+      "mute": false,
+      "solo": false,
       "fx": [
-        { "type": "lowpass", "cutoff": 2000, "q": 0.7 },
-        { "type": "reverb", "size": 0.9, "damp": 0.6, "mix": 0.5 }
+        {
+          "type": "lowpass",
+          "cutoff": 2000,
+          "q": 0.7
+        },
+        {
+          "type": "reverb",
+          "damp": 0.6,
+          "mix": 0.5,
+          "size": 0.9
+        }
       ],
       "notes": [
-        { "t": 0.0, "pitch": "A3", "dur": 4.0, "vel": 90 },
-        { "t": 0.0, "pitch": "C4", "dur": 4.0, "vel": 85 },
-        { "t": 0.0, "pitch": "E4", "dur": 4.0, "vel": 85 },
-        { "t": 4.0, "pitch": "F3", "dur": 4.0, "vel": 90 },
-        { "t": 4.0, "pitch": "A3", "dur": 4.0, "vel": 85 },
-        { "t": 4.0, "pitch": "C4", "dur": 4.0, "vel": 85 },
-        { "t": 8.0, "pitch": "G3", "dur": 4.0, "vel": 90 },
-        { "t": 8.0, "pitch": "B3", "dur": 4.0, "vel": 85 },
-        { "t": 8.0, "pitch": "D4", "dur": 4.0, "vel": 85 },
-        { "t": 12.0, "pitch": "E3", "dur": 4.0, "vel": 90 },
-        { "t": 12.0, "pitch": "G3", "dur": 4.0, "vel": 85 },
-        { "t": 12.0, "pitch": "B3", "dur": 4.0, "vel": 85 }
+        {
+          "t": 0.0,
+          "pitch": "A3",
+          "dur": 4.0,
+          "vel": 90
+        },
+        {
+          "t": 0.0,
+          "pitch": "C4",
+          "dur": 4.0,
+          "vel": 85
+        },
+        {
+          "t": 0.0,
+          "pitch": "E4",
+          "dur": 4.0,
+          "vel": 85
+        },
+        {
+          "t": 4.0,
+          "pitch": "F3",
+          "dur": 4.0,
+          "vel": 90
+        },
+        {
+          "t": 4.0,
+          "pitch": "A3",
+          "dur": 4.0,
+          "vel": 85
+        },
+        {
+          "t": 4.0,
+          "pitch": "C4",
+          "dur": 4.0,
+          "vel": 85
+        },
+        {
+          "t": 8.0,
+          "pitch": "G3",
+          "dur": 4.0,
+          "vel": 90
+        },
+        {
+          "t": 8.0,
+          "pitch": "B3",
+          "dur": 4.0,
+          "vel": 85
+        },
+        {
+          "t": 8.0,
+          "pitch": "D4",
+          "dur": 4.0,
+          "vel": 85
+        },
+        {
+          "t": 12.0,
+          "pitch": "E3",
+          "dur": 4.0,
+          "vel": 90
+        },
+        {
+          "t": 12.0,
+          "pitch": "G3",
+          "dur": 4.0,
+          "vel": 85
+        },
+        {
+          "t": 12.0,
+          "pitch": "B3",
+          "dur": 4.0,
+          "vel": 85
+        }
       ]
     }
   ]

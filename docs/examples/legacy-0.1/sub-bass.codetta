@@ -1,0 +1,34 @@
+{
+  "version": "0.1",
+  "metadata": {
+    "name": "Preset: sub_bass",
+    "bpm": 140,
+    "key": "Am",
+    "time_signature": [4, 4],
+    "tags": ["preset", "cyber", "bass"]
+  },
+  "tracks": [
+    {
+      "id": "bass",
+      "name": "Sub Bass",
+      "instrument": {
+        "type": "sin",
+        "params": { "attack": 0.005, "decay": 0.1, "sustain": 0.95, "release": 0.05 }
+      },
+      "volume": 0.9,
+      "pan": 0.0,
+      "fx": [
+        { "type": "lowpass", "cutoff": 150, "q": 0.7 }
+      ],
+      "notes": [
+        { "t": 0.0, "pitch": "A2", "dur": 1.5, "vel": 110 },
+        { "t": 1.5, "pitch": "A2", "dur": 0.5, "vel": 90 },
+        { "t": 2.0, "pitch": "F2", "dur": 1.5, "vel": 110 },
+        { "t": 3.5, "pitch": "F2", "dur": 0.5, "vel": 90 },
+        { "t": 4.0, "pitch": "G2", "dur": 1.5, "vel": 110 },
+        { "t": 5.5, "pitch": "G2", "dur": 0.5, "vel": 90 },
+        { "t": 6.0, "pitch": "E2", "dur": 2.0, "vel": 110 }
+      ]
+    }
+  ]
+}

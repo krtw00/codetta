@@ -1,28 +1,58 @@
 {
-  "version": "0.1",
   "metadata": {
-    "name": "Smoke Test (sin)",
     "bpm": 120,
     "key": "C",
-    "time_signature": [4, 4],
-    "tags": ["smoke", "phase0"]
+    "name": "Smoke Test (sin)",
+    "tags": [
+      "smoke",
+      "phase0"
+    ],
+    "time_signature": [
+      4,
+      4
+    ]
   },
   "tracks": [
     {
       "id": "lead",
-      "name": "Sin Lead",
       "instrument": {
-        "type": "sin",
-        "params": { "attack": 0.01, "decay": 0.1, "sustain": 0.7, "release": 0.3 }
+        "params": {
+          "bank": 0,
+          "file": "GeneralUser-GS-v1.471.sf2",
+          "preset": 38
+        },
+        "type": "soundfont"
       },
-      "volume": 0.7,
-      "pan": 0.0,
+      "name": "Sin Lead",
       "notes": [
-        { "t": 0.0, "pitch": "C4", "dur": 0.5, "vel": 100 },
-        { "t": 0.5, "pitch": "E4", "dur": 0.5, "vel": 100 },
-        { "t": 1.0, "pitch": "G4", "dur": 0.5, "vel": 100 },
-        { "t": 1.5, "pitch": "C5", "dur": 1.0, "vel": 110 }
-      ]
+        {
+          "dur": 0.5,
+          "pitch": "C4",
+          "t": 0.0,
+          "vel": 100
+        },
+        {
+          "dur": 0.5,
+          "pitch": "E4",
+          "t": 0.5,
+          "vel": 100
+        },
+        {
+          "dur": 0.5,
+          "pitch": "G4",
+          "t": 1.0,
+          "vel": 100
+        },
+        {
+          "dur": 1.0,
+          "pitch": "C5",
+          "t": 1.5,
+          "vel": 110
+        }
+      ],
+      "pan": 0.0,
+      "volume": 0.7
     }
-  ]
+  ],
+  "version": "0.2"
 }
