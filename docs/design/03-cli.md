@@ -116,7 +116,7 @@ flowchart LR
 
 | 変数 | デフォルト | 説明 |
 |---|---|---|
-| `CODETTA_WORKSPACE` | `$HOME/codetta-songs/` | `.codetta` ファイルの相対 path 解決 (MCP server 経由時。 CLI 単体で相対 path を渡せばカレントから解決) |
+| `CODETTA_WORKSPACE` | `$HOME/Music/codetta/` | `.codetta` ファイルの相対 path 解決 (MCP server 経由時。 CLI 単体で相対 path を渡せばカレントから解決) |
 | `CODETTA_SOUNDFONT_DIR` | `$HOME/Music/sf2/` | SF2 ファイルの相対 path 解決 |
 
 MCP server は環境変数を継承する。

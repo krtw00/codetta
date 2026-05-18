@@ -2,14 +2,14 @@ import { homedir } from "node:os";
 import { mkdirSync, statSync } from "node:fs";
 import { isAbsolute, join, resolve, sep } from "node:path";
 
-const DEFAULT_WORKSPACE = join(homedir(), "codetta-songs");
+const DEFAULT_WORKSPACE = join(homedir(), "Music", "codetta");
 
 /**
  * MCP server が扱うファイルの基準ディレクトリ。
  * 設計: docs/design/04-mcp.md「ワークスペース管理」
  *
  * - `CODETTA_WORKSPACE` 環境変数で指定 (絶対パス)
- * - 未指定なら `~/codetta-songs/`
+ * - 未指定なら `~/Music/codetta/` (= SF2 dir `~/Music/sf2/` と階層を揃える)
  * - 存在しなければ作成 (mkdir -p)
  */
 export function getWorkspace(): string {

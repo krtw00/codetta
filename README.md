@@ -22,7 +22,7 @@ npm install --prefix mcp-server && npm run build --prefix mcp-server
 # Claude Code に user scope で登録
 claude mcp add --scope user codetta \
   --env CODETTA_BIN=/absolute/path/to/codetta/target/release/codetta \
-  --env CODETTA_WORKSPACE=$HOME/codetta-workspace \
+  --env CODETTA_WORKSPACE=$HOME/Music/codetta \
   -- node /absolute/path/to/codetta/mcp-server/dist/index.js
 ```
 

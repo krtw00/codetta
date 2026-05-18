@@ -59,7 +59,7 @@ sequenceDiagram
 MCP server が扱うファイルの場所は、 環境変数で制御する:
 
 ```
-CODETTA_WORKSPACE=<absolute path>   # デフォルト: ~/codetta-songs/
+CODETTA_WORKSPACE=<absolute path>   # デフォルト: ~/Music/codetta/
 ```
 
 tool に `path` を渡す時の扱い:
@@ -611,7 +611,7 @@ async function callCli(args: string[]): Promise<unknown> {
 
 ### `CODETTA_WORKSPACE` の起動時検証
 
-- 環境変数チェック → 未設定なら `~/codetta-songs/` を作成
+- 環境変数チェック → 未設定なら `~/Music/codetta/` を作成
 - 書き込み権限チェック
 - パスがシンボリックリンク経由で外部に出ないことを保証
 
@@ -680,7 +680,7 @@ Claude:
 
 決着済 (履歴):
 
-- [x] `CODETTA_WORKSPACE` のデフォルト → **`~/codetta-songs/`**
+- [x] `CODETTA_WORKSPACE` のデフォルト → **`~/Music/codetta/`** (= SF2 dir `~/Music/sf2/` と階層を揃える、 2026-05-18 に `~/codetta-songs/` から変更)
 - [x] resources で公開する楽曲ファイルの権限 → **読み取り専用、 編集は tool 経由のみ**
 - [x] `render_wav` で WAV を base64 で返すオプション → **不要** (path 返却で十分)
 - [x] tool 呼び出しのレート制限 → **不要** (ローカル subprocess のため)

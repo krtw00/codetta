@@ -38,7 +38,7 @@ npm run build
 | 変数 | 既定値 | 説明 |
 |---|---|---|
 | `CODETTA_BIN` | `codetta` (PATH 解決) | `codetta-cli` の実行ファイル絶対パス |
-| `CODETTA_WORKSPACE` | `~/codetta-songs/` | 相対パスの `.codetta` 解決基準。未存在なら自動作成 |
+| `CODETTA_WORKSPACE` | `~/Music/codetta/` | 相対パスの `.codetta` 解決基準。未存在なら自動作成 |
 | `CODETTA_PRESETS_DIR` | `<dist>/presets/` (build 時に `<repo>/docs/examples/` をコピー) | プリセット resource の読み込み元 |
 | `CODETTA_SOUNDFONT_DIR` | `~/Music/sf2/` | `list_soundfont_presets` / `codetta://soundfonts/{name}` の相対パス解決基準 |
 
@@ -65,7 +65,7 @@ shell の rc ファイルで export しておく。
       "args": ["/absolute/path/to/codetta/mcp-server/dist/index.js"],
       "env": {
         "CODETTA_BIN": "/absolute/path/to/codetta/target/release/codetta",
-        "CODETTA_WORKSPACE": "/Users/you/codetta-songs"
+        "CODETTA_WORKSPACE": "/Users/you/Music/codetta"
       }
     }
   }
