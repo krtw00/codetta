@@ -141,7 +141,7 @@ export function registerTools(server: McpServer): void {
           .max(4)
           .optional()
           .describe(
-            "全 track 合算後 (soft_clip 前) に乗算する master gain。 0.0-4.0 (default 1.0)。 SF2 系で内蔵合成より peak が低い時のヘッドルーム調整に使う。 dogfooding 推奨値は 2.0",
+            "全 track 合算後 (soft_clip 前) に乗算する master gain。 0.0-4.0 (default 1.0)。 voice 密度別の目安: 単 track or 薄いアレンジ=2.0 / 2 track 中音域=1.5-1.8 / 3 track 以上で chord pad + percussion 同時発音=1.0-1.2 (peak overflow + soft_clip の歪み回避)。 不明なら render 後に試聴して調整する。",
           ),
         overwrite: z
           .boolean()
@@ -551,7 +551,7 @@ export function registerTools(server: McpServer): void {
     {
       title: "Set the project's master gain",
       description:
-        "プロジェクトの metadata.master_gain を変更する。 0.0-4.0、 default 1.0。 全 track 合算後 (soft_clip 前) に乗算される post-mix gain。 SF2 系で内蔵合成より peak が低い時のヘッドルーム調整に使う。 dogfooding 推奨値は 2.0",
+        "プロジェクトの metadata.master_gain を変更する。 0.0-4.0、 default 1.0。 全 track 合算後 (soft_clip 前) に乗算される post-mix gain。 voice 密度別の目安: 単 track or 薄いアレンジ=2.0 / 2 track 中音域=1.5-1.8 / 3 track 以上で chord pad + percussion 同時発音=1.0-1.2 (peak overflow + soft_clip の歪み回避)。 不明なら render 後に試聴して調整する。",
       inputSchema: {
         path: z.string().describe("対象 .codetta ファイル"),
         value: z

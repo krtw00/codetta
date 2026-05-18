@@ -103,7 +103,9 @@ struct NewArgs {
     /// 拍子 N/D (例: "4/4")
     #[arg(long = "time-sig", value_parser = parse_time_sig, default_value = "4/4")]
     time_sig: [u32; 2],
-    /// 全 track 合算後 (soft_clip 前) に乗算する master gain。 0.0..=4.0、 デフォルト 1.0
+    /// 全 track 合算後 (soft_clip 前) に乗算する master gain。 0.0..=4.0、 デフォルト 1.0。
+    /// voice 密度別の目安: 単 track or 薄いアレンジ=2.0 / 2 track 中音域=1.5-1.8 /
+    /// 3 track 以上で chord pad + percussion 同時発音=1.0-1.2 (peak overflow + soft_clip の歪み回避)
     #[arg(long = "master-gain")]
     master_gain: Option<f32>,
     /// 既存ファイルを上書き
