@@ -8,7 +8,27 @@ MCP (Model Context Protocol) 統合により、AI が一級市民として作曲
 
 ## ステータス
 
-🚧 **Phase 1 進行中** — CLI (`codetta build` / `render` / `validate` 等) と MCP server (15 tools + 5 resources) が動作。公開リリースは Phase 4 (`docs/design/00-vision.md` 参照)
+🚧 **Phase 4 (配布整備) 進行中** — CLI (`codetta new` / `render` / `validate` / `import-midi` / `export-midi` / `migrate` 等) と MCP server (15 tools + 5 resources) が動作。配布パイプライン (GitHub Release バイナリ + bundle SF2) を整備中 (`docs/design/00-vision.md` / `09-distribution.md` 参照)
+
+## インストール
+
+> 初版 (`v0.2.0`) Release 公開後に利用できます。配布ビルドには **GeneralUser GS (SF2) を同梱**しているため、別途ダウンロード不要でそのまま音が鳴ります。
+
+**(a) Releases から手動 DL** — [Releases](https://github.com/krtw00/codetta/releases) から OS 別アーカイブ (macOS / Windows / Linux) を取得して解凍し、`bin/codetta` を実行 (PATH に置くと便利)。アーカイブには `codetta` 本体・`assets/GeneralUser-GS.sf2`・ライセンスが同梱されています。
+
+**(b) インストーラ (ワンライナー)**
+
+```bash
+# macOS / Linux
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/krtw00/codetta/releases/latest/download/codetta-cli-installer.sh | sh
+```
+
+```powershell
+# Windows (PowerShell)
+powershell -c "irm https://github.com/krtw00/codetta/releases/latest/download/codetta-cli-installer.ps1 | iex"
+```
+
+macOS バイナリは現状 **未署名**です。Gatekeeper に弾かれた場合は `xattr -dr com.apple.quarantine <path>/codetta` で隔離属性を外してください (署名 / notarization は今後対応)。
 
 ## MCP server (Claude Code 等のクライアント向け)
 
@@ -35,7 +55,7 @@ Claude Desktop 用設定、tool / resource 一覧、smoke test の手順等は *
 
 Codetta の音源は外部 SoundFont (`.sf2`) です (schema 0.2 で内蔵 synth は撤去済)。**配布ビルド (GitHub Release / Homebrew) には GeneralUser GS を同梱**しているため、ダウンロード不要でそのまま `codetta render` が鳴ります。`instrument.params.file` を省略すると、この同梱 SF2 (bundle SF2) が暗黙の default として解決されます。
 
-ソースから `cargo build` した場合は SF2 を同梱しないため (= リポジトリに git-track しない方針 / `docs/design/09-distribution.md`)、別の SF2 を使いたい場合や bundle 未配備の環境では、ユーザー自身で OSS SF2 を取得して配置してください (下記)。
+ソースから `cargo build` した場合は SF2 を同梱しないため (= リポジトリに git-track しない方針 / `docs/design/09-distribution.md`)、ユーザー自身で OSS SF2 を取得して配置してください (下記)。とくに `file` 省略 (= bundle SF2 default) を使うには、default 名の `GeneralUser-GS.sf2` (GeneralUser GS v2.0.3、[公式](https://www.schristiancollins.com/generaluser.php) / [GitHub mirror](https://github.com/mrbumpy409/GeneralUser-GS)) を `~/Music/sf2/` に置く必要があります。
 
 ### 1. SF2 ファイルを取得
 

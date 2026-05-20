@@ -22,6 +22,9 @@ dist/
 *.mid
 !docs/examples/**/*.mid
 
+# bundle SF2 (= release archive 用に build 時 download、 git-track しない / 09-distribution.md)
+assets/
+
 # Local sessions (CLAUDE.md ルール: 個人参照のみ)
 HANDOFF.md
 docs/sessions/

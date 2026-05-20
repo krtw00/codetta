@@ -1,0 +1,17 @@
+# dist の build-local-artifacts ジョブ (= 各ターゲットのバイナリ + archive をビルド) に
+# checkout 直後・dist build の前に注入されるカスタムステップ。
+# (= dist-workspace.toml の github-build-setup から参照)
+#
+# bundle SF2 (GeneralUser GS v2.0.3) をリポジトリに git-track しない方針 (= 09-distribution.md) のため、
+# archive を組む前にここで download して assets/ に配置する。 dist は include = ["assets/GeneralUser-GS.sf2"]
+# でこれを archive ルートに同梱する。
+#
+# URL は自前再ホスト (= 専用 data Release の immutable asset)。 この Release / asset は
+# CDT-13 着手者が手動で 1 度作成・upload する前提 (= 未作成だとこのステップで 404)。
+# expected sha256: 9575028c7a1f589f5770fccc8cff2734566af40cd26ed836944e9a5152688cfe
+- name: Download bundle SoundFont (GeneralUser GS v2.0.3)
+  shell: bash
+  run: |
+    mkdir -p assets
+    curl --proto '=https' --tlsv1.2 -fSL --retry 3 -o assets/GeneralUser-GS.sf2 \
+      "https://github.com/krtw00/codetta/releases/download/assets-sf2-v2.0.3/GeneralUser-GS.sf2"

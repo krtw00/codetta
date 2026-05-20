@@ -1,0 +1,26 @@
+[workspace]
+members = ["cargo:."]
+
+# Config for 'dist' (= release pipeline、 docs/design/09-distribution.md)
+[dist]
+# CI 再現性のため dist 自身の version を pin する
+cargo-dist-version = "0.31.0"
+# CI backend
+ci = "github"
+# installer: shell (mac/linux の curl 一発)、 powershell (windows)。 homebrew は CDT-14 で追加
+installers = ["shell", "powershell"]
+# 配布ターゲット (= 09-distribution.md のターゲットトリプル表、 4 platform)
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+    "x86_64-unknown-linux-gnu",
+]
+# アーカイブ形式: unix=.tar.gz (ADR)、 windows は default の .zip
+unix-archive = ".tar.gz"
+windows-archive = ".zip"
+# bundle SF2 を archive ルートに同梱する (= build 前に github-build-setup で download 配置)。
+# SF2 はリポジトリに git-track しない (= 09-distribution.md)。
+include = ["assets/GeneralUser-GS.sf2"]
+# build (dist build) の前に bundle SF2 を download するカスタムステップを注入する
+github-build-setup = "../build-setup.yml"
