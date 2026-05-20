@@ -1,6 +1,6 @@
 {
   "name": "@codetta/mcp-server",
-  "version": "0.0.1",
+  "version": "0.2.0",
   "description": "Codetta MCP server — codetta-cli を MCP (Model Context Protocol) tool/resource として LLM クライアントに公開する薄い wrapper",
   "license": "Apache-2.0",
   "type": "module",

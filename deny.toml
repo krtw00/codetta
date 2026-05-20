@@ -1,0 +1,23 @@
+# cargo-deny 設定。 主目的は依存ツリーのライセンス確認 (= docs/design/09-distribution.md L226、 CDT-13)。
+# release.yml (CI) で `cargo deny check licenses` を実行し、 bundle 配布する依存がすべて
+# permissive license であることを保証する。
+
+[licenses]
+# 依存ツリーに現れる license (SPDX) のみを列挙する。 新しい license が増えたら check が
+# 落ちるので、 その時点で由来 (= permissive か) を確認してから追記する (= ライセンス監査ゲート)。
+# 現状の内訳: Apache-2.0 / MIT (大半の crate、 多くは dual)、 Unicode-3.0 (unicode-ident)、
+# Unlicense (memchr / midly = いずれも public-domain 相当の permissive)。
+allow = [
+    "Apache-2.0",
+    "MIT",
+    "Unicode-3.0",
+    "Unlicense",
+]
+confidence-threshold = 0.8
+
+[bans]
+multiple-versions = "allow"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
