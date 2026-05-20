@@ -161,7 +161,7 @@ A 案を採用したのは「DAW import 時の column 表示が 1:1 で直感的
         "name": "Saw Lead",
         "instrument": {
           "type": "soundfont",
-          "params": { "file": "GeneralUser-GS-v1.471.sf2", "preset": 81, "bank": 0 }
+          "params": { "file": "GeneralUser-GS.sf2", "preset": 81, "bank": 0 }
         },
         "fx": [
           { "type": "delay", "time": "1/8", "feedback": 0.3, "mix": 0.25 },
@@ -173,7 +173,7 @@ A 案を採用したのは「DAW import 時の column 表示が 1:1 で直感的
         "name": "Drums",
         "instrument": {
           "type": "soundfont",
-          "params": { "file": "GeneralUser-GS-v1.471.sf2", "preset": 0, "bank": 128 }
+          "params": { "file": "GeneralUser-GS.sf2", "preset": 0, "bank": 128 }
         },
         "fx": []
       }

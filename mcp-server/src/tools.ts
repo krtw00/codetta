@@ -353,7 +353,7 @@ export function registerTools(server: McpServer): void {
           .string()
           .optional()
           .describe(
-            "LUT 適用後の soundfont params.file に書き込む SF2 ファイル名。省略時は default (GeneralUser-GS-v1.471.sf2)",
+            "LUT 適用後の soundfont params.file に書き込む SF2 ファイル名。省略時は default (GeneralUser-GS.sf2)",
           ),
       },
     },
@@ -397,7 +397,7 @@ export function registerTools(server: McpServer): void {
           .string()
           .optional()
           .describe(
-            "Instrument.params.file に書く SF2 ファイル名 (省略時は default SF2 = GeneralUser-GS-v1.471.sf2)。 指定があれば preset 存在確認も行う",
+            "Instrument.params.file に書く SF2 ファイル名 (省略時は default SF2 = GeneralUser-GS.sf2)。 指定があれば preset 存在確認も行う",
           ),
         name: z
           .string()
@@ -461,7 +461,7 @@ export function registerTools(server: McpServer): void {
           .string()
           .optional()
           .describe(
-            "0.1 入力の in-memory migrate 時に soundfont params.file に書き込む SF2 ファイル名 (省略時は default SF2 = GeneralUser-GS-v1.471.sf2)。 0.2 入力では使用されない",
+            "0.1 入力の in-memory migrate 時に soundfont params.file に書き込む SF2 ファイル名 (省略時は default SF2 = GeneralUser-GS.sf2)。 0.2 入力では使用されない",
           ),
         overwrite: z
           .boolean()

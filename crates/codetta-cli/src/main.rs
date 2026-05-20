@@ -148,7 +148,7 @@ struct AddTrackArgs {
     name: Option<String>,
     /// 楽器 type。 schema 0.2 では `soundfont` 1 種のみ (= デフォルト)。
     /// SF2 path や preset は `--params-json` で指定する (例:
-    /// `--params-json '{"file":"GeneralUser-GS-v1.471.sf2","preset":0,"bank":0}'`)。
+    /// `--params-json '{"file":"GeneralUser-GS.sf2","preset":0,"bank":0}'`)。
     #[arg(long, default_value = "soundfont")]
     instrument: String,
     /// 音量 0.0-1.0

@@ -53,7 +53,7 @@ Codetta の音源は外部 SoundFont (`.sf2`) です (schema 0.2 で内蔵 synth
 
 ```bash
 mkdir -p ~/Music/sf2
-# 例: GeneralUser-GS-v1.471.sf2 を ~/Music/sf2/ に配置
+# 例: GeneralUser-GS.sf2 を ~/Music/sf2/ に配置
 
 # 別の場所に置きたい場合は env で上書き
 export CODETTA_SOUNDFONT_DIR="$HOME/path/to/soundfonts"
@@ -67,7 +67,7 @@ export CODETTA_SOUNDFONT_DIR="$HOME/path/to/soundfonts"
 codetta new sf2-demo.codetta --bpm 100 --force
 codetta add-track sf2-demo.codetta --id piano --name Piano \
   --instrument soundfont \
-  --params-json '{"file":"GeneralUser-GS-v1.471.sf2","preset":0}'
+  --params-json '{"file":"GeneralUser-GS.sf2","preset":0}'
 echo '[{"t":0,"pitch":"C4","dur":1},{"t":1,"pitch":"E4","dur":1},{"t":2,"pitch":"G4","dur":1}]' > notes.json
 codetta set-notes sf2-demo.codetta --track piano --notes-file notes.json
 codetta validate sf2-demo.codetta   # SOUNDFONT_FILE_NOT_FOUND が出なければ OK
@@ -84,13 +84,13 @@ SF2 が持っている preset (program) 番号 / bank / 名前を確認する方
 
 ```
 # 例: Claude Desktop から
-@codetta://soundfonts/GeneralUser-GS-v1.471.sf2
+@codetta://soundfonts/GeneralUser-GS.sf2
 ```
 
 **(b) CLI で詳細列挙** — ターミナルで全 preset を眺めたい / `jq` でフィルタしたい場合は `list-soundfont-presets` を使います。出力は JSON 1 本。
 
 ```bash
-codetta list-soundfont-presets GeneralUser-GS-v1.471.sf2 | jq '.presets[] | select(.bank == 0 and .preset < 8)'
+codetta list-soundfont-presets GeneralUser-GS.sf2 | jq '.presets[] | select(.bank == 0 and .preset < 8)'
 # => Stereo Grand / Bright Grand / Electric Grand / ... (Piano family)
 ```
 
@@ -98,7 +98,7 @@ codetta list-soundfont-presets GeneralUser-GS-v1.471.sf2 | jq '.presets[] | sele
 
 ```json
 {
-  "file": "/Users/.../GeneralUser-GS-v1.471.sf2",
+  "file": "/Users/.../GeneralUser-GS.sf2",
   "ok": true,
   "preset_count": 269,
   "soundfont": { "bank_name": "...", "author": "...", "version": "2.1", ... },

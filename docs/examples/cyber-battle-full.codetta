@@ -24,7 +24,7 @@
         "type": "soundfont",
         "params": {
           "bank": 128,
-          "file": "GeneralUser-GS-v1.471.sf2",
+          "file": "GeneralUser-GS.sf2",
           "preset": 0
         }
       },
@@ -618,7 +618,7 @@
         "type": "soundfont",
         "params": {
           "bank": 0,
-          "file": "GeneralUser-GS-v1.471.sf2",
+          "file": "GeneralUser-GS.sf2",
           "preset": 38
         }
       },
@@ -733,7 +733,7 @@
         "type": "soundfont",
         "params": {
           "bank": 0,
-          "file": "GeneralUser-GS-v1.471.sf2",
+          "file": "GeneralUser-GS.sf2",
           "preset": 81
         }
       },
@@ -937,7 +937,7 @@
         "type": "soundfont",
         "params": {
           "bank": 0,
-          "file": "GeneralUser-GS-v1.471.sf2",
+          "file": "GeneralUser-GS.sf2",
           "preset": 88
         }
       },

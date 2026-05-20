@@ -187,7 +187,7 @@ classDiagram
 {
   "type": "soundfont",
   "params": {
-    "file": "GeneralUser-GS-v1.471.sf2",
+    "file": "GeneralUser-GS.sf2",
     "preset": 0,
     "bank": 0
   }
@@ -273,7 +273,7 @@ Phase 4 で配布バイナリに同梱予定の `GeneralUser-GS.sf2` (約 30MB) 
       "name": "Saw Lead",
       "instrument": {
         "type": "soundfont",
-        "params": { "file": "GeneralUser-GS-v1.471.sf2", "preset": 81, "bank": 0 }
+        "params": { "file": "GeneralUser-GS.sf2", "preset": 81, "bank": 0 }
       },
       "volume": 0.7,
       "pan": 0.0,
@@ -296,7 +296,7 @@ Phase 4 で配布バイナリに同梱予定の `GeneralUser-GS.sf2` (約 30MB) 
       "name": "Synth Bass",
       "instrument": {
         "type": "soundfont",
-        "params": { "file": "GeneralUser-GS-v1.471.sf2", "preset": 38, "bank": 0 }
+        "params": { "file": "GeneralUser-GS.sf2", "preset": 38, "bank": 0 }
       },
       "volume": 0.9,
       "notes": [
@@ -311,7 +311,7 @@ Phase 4 で配布バイナリに同梱予定の `GeneralUser-GS.sf2` (約 30MB) 
       "name": "Drums",
       "instrument": {
         "type": "soundfont",
-        "params": { "file": "GeneralUser-GS-v1.471.sf2", "preset": 0, "bank": 128 }
+        "params": { "file": "GeneralUser-GS.sf2", "preset": 0, "bank": 128 }
       },
       "volume": 0.8,
       "notes": [

@@ -219,7 +219,7 @@ WAV のバイト列は**返さない** (大きすぎる) — LLM はパスを返
 | `codetta://soundfonts/{name}` | `$CODETTA_SOUNDFONT_DIR/{name}.sf2` の preset 一覧 + メタ (`list_soundfont_presets` tool と同内容) |
 | `codetta://presets/{name}` | `docs/examples/{name}.codetta` のサンプル曲 (read-only) |
 
-`{name}` は拡張子を除いたファイル名 (例: `cyber-lead`, `GeneralUser-GS-v1.471`)。
+`{name}` は拡張子を除いたファイル名 (例: `cyber-lead`, `GeneralUser-GS`)。
 クライアントが `resources/list` を呼ぶと、 各 template が workspace / SF2 dir / presets dir をスキャンして
 動的に列挙される。
 

@@ -23,7 +23,7 @@
         "type": "soundfont",
         "params": {
           "bank": 0,
-          "file": "GeneralUser-GS-v1.471.sf2",
+          "file": "GeneralUser-GS.sf2",
           "preset": 88
         }
       },

@@ -38,7 +38,7 @@
 
 ## レンダリング手順
 
-事前: `cargo build -p codetta-cli` で `target/debug/codetta` を用意。 `~/Music/sf2/GeneralUser-GS-v1.471.sf2` (= 既定 SF2 探索先) が存在することが前提 (validate が `SOUNDFONT_FILE_NOT_FOUND` を返したら DL 案内、 もしくは `$CODETTA_SOUNDFONT_DIR` を絶対 path で指定)。
+事前: `cargo build -p codetta-cli` で `target/debug/codetta` を用意。 `~/Music/sf2/GeneralUser-GS.sf2` (= 既定 SF2 探索先) が存在することが前提 (validate が `SOUNDFONT_FILE_NOT_FOUND` を返したら DL 案内、 もしくは `$CODETTA_SOUNDFONT_DIR` を絶対 path で指定)。
 
 ```bash
 # 単体プリセットを鳴らす
@@ -78,7 +78,7 @@ done
 {
   "instrument": {
     "type": "soundfont",
-    "params": { "file": "GeneralUser-GS-v1.471.sf2", "preset": 81, "bank": 0 }
+    "params": { "file": "GeneralUser-GS.sf2", "preset": 81, "bank": 0 }
   },
   "fx": [
     { "type": "lowpass", "cutoff": 1500, "q": 3.0 },
@@ -98,7 +98,7 @@ done
 {
   "instrument": {
     "type": "soundfont",
-    "params": { "file": "GeneralUser-GS-v1.471.sf2", "preset": 38, "bank": 0 }
+    "params": { "file": "GeneralUser-GS.sf2", "preset": 38, "bank": 0 }
   },
   "fx": [ { "type": "lowpass", "cutoff": 150, "q": 0.7 } ]
 }
@@ -114,7 +114,7 @@ done
 {
   "instrument": {
     "type": "soundfont",
-    "params": { "file": "GeneralUser-GS-v1.471.sf2", "preset": 80, "bank": 0 }
+    "params": { "file": "GeneralUser-GS.sf2", "preset": 80, "bank": 0 }
   },
   "fx": [
     { "type": "delay", "time": "1/16", "feedback": 0.5, "mix": 0.4 },
@@ -133,7 +133,7 @@ done
 {
   "instrument": {
     "type": "soundfont",
-    "params": { "file": "GeneralUser-GS-v1.471.sf2", "preset": 88, "bank": 0 }
+    "params": { "file": "GeneralUser-GS.sf2", "preset": 88, "bank": 0 }
   },
   "fx": [
     { "type": "lowpass", "cutoff": 2000, "q": 0.7 },
@@ -198,10 +198,10 @@ LLM や人間が「ここを変えてみたい」 と思うパラメータ:
 | もっと激しく | BPM 130 → 160、 drum の hh velocity を底上げ |
 | ダーク化 | `pad` の lowpass cutoff 2000 → 800 / reverb size 0.9 → 0.95 |
 | 全体音圧を上げる | `metadata.master_gain` を 2.0 → 3.0 |
-| lead を Square Lead に差替 | `set-instrument --track lead --type soundfont --params-json '{"file":"GeneralUser-GS-v1.471.sf2","preset":80,"bank":0}'` |
+| lead を Square Lead に差替 | `set-instrument --track lead --type soundfont --params-json '{"file":"GeneralUser-GS.sf2","preset":80,"bank":0}'` |
 | 全体を生楽器寄せに | preset 81 → 24 (Nylon Guitar)、 38 → 33 (Electric Bass)、 88 → 48 (String Ensemble) で acoustic-feel 化 |
 | アルペジオ追加 | `cyber-arp.codetta` の `arp` track をマージ |
-| drum kit 差替 | `set-instrument --track drums --type soundfont --params-json '{"file":"GeneralUser-GS-v1.471.sf2","preset":32,"bank":128}'` (= Jazz Kit) |
+| drum kit 差替 | `set-instrument --track drums --type soundfont --params-json '{"file":"GeneralUser-GS.sf2","preset":32,"bank":128}'` (= Jazz Kit) |
 
 CLI 操作例:
 
@@ -213,7 +213,7 @@ CLI 操作例:
 # drum kit を Jazz に差し替え
 ./target/debug/codetta set-instrument docs/examples/cyber-battle-full.codetta \
   --track drums --type soundfont \
-  --params-json '{"file":"GeneralUser-GS-v1.471.sf2","preset":32,"bank":128}'
+  --params-json '{"file":"GeneralUser-GS.sf2","preset":32,"bank":128}'
 
 # 全体音圧を更に上げる
 ./target/debug/codetta set-master-gain docs/examples/cyber-battle-full.codetta --value 3.0

@@ -11,7 +11,7 @@ use serde_json::{Map, Value};
 
 /// LUT で楽器 type が見つからなかった時に当て込む default SF2 ファイル。
 /// CLI / MCP の `--sf2` で上書き可能。
-pub const DEFAULT_SF2: &str = "GeneralUser-GS-v1.471.sf2";
+pub const DEFAULT_SF2: &str = "GeneralUser-GS.sf2";
 
 const FROM_VERSION: &str = "0.1";
 const TO_VERSION: &str = "0.2";

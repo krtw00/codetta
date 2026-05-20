@@ -89,7 +89,7 @@ fn export_import_round_trip_preserves_song() {
                 "name": "Saw Lead",
                 "instrument": {
                     "type": "soundfont",
-                    "params": { "file": "GeneralUser-GS-v1.471.sf2", "preset": 81, "bank": 0 }
+                    "params": { "file": "GeneralUser-GS.sf2", "preset": 81, "bank": 0 }
                 },
                 "volume": 0.8,
                 "pan": 0.0,
@@ -104,7 +104,7 @@ fn export_import_round_trip_preserves_song() {
                 "name": "Drums",
                 "instrument": {
                     "type": "soundfont",
-                    "params": { "file": "GeneralUser-GS-v1.471.sf2", "preset": 0, "bank": 128 }
+                    "params": { "file": "GeneralUser-GS.sf2", "preset": 0, "bank": 128 }
                 },
                 "volume": 0.9,
                 "pan": 0.0,
@@ -195,7 +195,7 @@ fn three_pass_round_trip_is_fixed_point() {
                 "name": "lead",
                 "instrument": {
                     "type": "soundfont",
-                    "params": { "file": "GeneralUser-GS-v1.471.sf2", "preset": 81, "bank": 0 }
+                    "params": { "file": "GeneralUser-GS.sf2", "preset": 81, "bank": 0 }
                 },
                 "volume": 0.8,
                 "pan": 0.0,

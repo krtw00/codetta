@@ -95,10 +95,7 @@ fn migrate_all_lut_entries_round_trip() {
         assert_eq!(track["instrument"]["type"], "soundfont");
         assert_eq!(track["instrument"]["params"]["preset"], preset);
         assert_eq!(track["instrument"]["params"]["bank"], bank);
-        assert_eq!(
-            track["instrument"]["params"]["file"],
-            "GeneralUser-GS-v1.471.sf2"
-        );
+        assert_eq!(track["instrument"]["params"]["file"], "GeneralUser-GS.sf2");
         // 旧 params (attack / pulse_width / detune_cents / kit) は破棄
         for legacy in [
             "attack",

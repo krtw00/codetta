@@ -17,7 +17,7 @@
 | `list-soundfont-presets` / `codetta://soundfonts/{name}` resource | ✅ |
 | ドラム track での `pitch: "kick"` 等 (SF2 経路) | ✅ CDT-5 — `synth::soundfont::DRUM_KEY_MIDI_MAP` 正本で要素名キー / MIDI / ノート名のいずれも受付 |
 | `migrate` (CDT-6) | ✅ 0.1 → 0.2 LUT 変換 (内蔵 synth → SF2 preset) |
-| bundle 配布 SF2 (`file` 省略時 fallback) | ✅ コード側実装済 (CDT-12) — `file` 省略時に bundle SF2 を resolve。 SF2 バイナリ (約 30MB) の物理同梱は Release / Homebrew 配布物側 (CDT-13/14)、 同梱 version は v2.0.3 予定 (= 09-distribution.md)。 現状の default 名は dogfood と一致する `GeneralUser-GS-v1.471.sf2` |
+| bundle 配布 SF2 (`file` 省略時 fallback) | ✅ 実装済 — `file` 省略時に bundle SF2 (`GeneralUser-GS.sf2` = GeneralUser GS v2.0.3) を resolve (CDT-12 コード側 + CDT-13 で `DEFAULT_SF2` / examples / tests を unversioned 名に統一)。 SF2 バイナリ (約 30MB) の物理同梱は Release アーカイブ / Homebrew (dist 経由、 CDT-13/14)、 git-track はしない (= 09-distribution.md) |
 
 ## 立ち位置
 
@@ -45,7 +45,7 @@
 | マイルストーン | 内容 | Phase |
 |---|---|---|
 | MIDI import / export | GM Program → SF2 preset マッピング、 ドラム channel 10 → bank 128、 拡張属性 (`master_gain` / fx / SF2 preset 詳細) の Text Meta Event 埋め込み or sidecar JSON 往復 | 3 |
-| bundle SF2 物理同梱 | 配布アーカイブ (GitHub Release `.tar.gz` の `assets/`、 Homebrew `share/codetta/`) に `GeneralUser-GS-v2.0.3.sf2` を同梱 (= SF2 はリポジトリに git-track しない、 09-distribution.md 決着済)。 `file` 省略時 fallback の **コード側**は CDT-12 で実装済 | 4 (CDT-13/14) |
+| bundle SF2 物理同梱 | 配布アーカイブ (GitHub Release の `assets/`、 Homebrew `share/codetta/`) に `GeneralUser-GS.sf2` (= GeneralUser GS v2.0.3) を同梱 (= git-track せず、 dist の build 時 download で同梱、 09-distribution.md)。 コード側 fallback は CDT-12、 名称統一は CDT-13 で実装済 | 4 (CDT-13/14) |
 | GUI 連携 (リアルタイム再生 / preset プレビュー) | GUI 側で SF2 を load しっぱなしにし、 piano roll 操作で随時 audition できるよう設計 | 5 |
 
 ## Instrument スキーマ (= 02-project-format.md と同期)
@@ -54,7 +54,7 @@
 {
   "type": "soundfont",
   "params": {
-    "file": "GeneralUser-GS-v1.471.sf2",  // 絶対 or $CODETTA_SOUNDFONT_DIR (default ~/Music/sf2/) からの相対
+    "file": "GeneralUser-GS.sf2",  // 絶対 or $CODETTA_SOUNDFONT_DIR (default ~/Music/sf2/) からの相対
     "preset": 0,                            // GM Program 番号 (0 = Acoustic Grand Piano)
     "bank": 0                               // GM bank (0 = melodic、 128 = drum kit、 省略時 0)
   }
@@ -75,10 +75,10 @@
 
 `file` 省略時は bundle SF2 を暗黙 default として解決する (= CDT-12 実装済):
 
-- `SoundFontParams::from_params` が `file` 欠落時に `DEFAULT_SF2` (現状 `GeneralUser-GS-v1.471.sf2`) を充てる
+- `SoundFontParams::from_params` が `file` 欠落時に `DEFAULT_SF2` (= `GeneralUser-GS.sf2`) を充てる
 - `resolve_soundfont_path` が相対 path をユーザー指定 dir (`$CODETTA_SOUNDFONT_DIR`、 default `~/Music/sf2/`) → bundle SF2 dir (Release アーカイブの `assets/`、 Homebrew prefix の `share/codetta/`) の順で探し、 最初に存在するものを使う
 
-SF2 バイナリ (約 30MB) 自体は **リポジトリに git-track せず**、 Release / Homebrew 配布物にのみ同梱する (= 09-distribution.md 決着済)。 同梱 version は v2.0.3 を予定するが、 default 名の v1.471 → v2.0.3 移行は Release タイミングで実施する (= CDT-13/14、 examples / tests / `DEFAULT_SF2` を一括更新)。
+SF2 バイナリ (約 30MB) 自体は **リポジトリに git-track せず**、 Release / Homebrew 配布物にのみ同梱する (= 09-distribution.md 決着済)。 同梱版は GeneralUser GS **v2.0.3**、 `DEFAULT_SF2` / examples / tests も `GeneralUser-GS.sf2` (unversioned) に統一済 (= CDT-13)。 ローカル開発で `file` 省略 render を試すには `~/Music/sf2/GeneralUser-GS.sf2` を配置する (= bundle 未配備のソースビルド環境向け、 README 参照)。
 
 ## Render path
 
@@ -215,8 +215,8 @@ GeneralUser GS / GM 互換 SF2 で頻用する preset 一覧。 02 / 03 / 06 で
 ### Phase 1 PoC
 
 ```bash
-# 前提: ~/Music/sf2/GeneralUser-GS-v1.471.sf2 が存在
-CODETTA_TEST_SF2="$HOME/Music/sf2/GeneralUser-GS-v1.471.sf2" \
+# 前提: ~/Music/sf2/GeneralUser-GS.sf2 が存在
+CODETTA_TEST_SF2="$HOME/Music/sf2/GeneralUser-GS.sf2" \
   cargo test --workspace soundfont
 ```
 
@@ -229,7 +229,7 @@ CODETTA_TEST_SF2="$HOME/Music/sf2/GeneralUser-GS-v1.471.sf2" \
 codetta new sf2.codetta --bpm 100 --force
 codetta add-track sf2.codetta --id piano --name Piano \
   --instrument soundfont \
-  --params-json '{"file":"GeneralUser-GS-v1.471.sf2","preset":0}'
+  --params-json '{"file":"GeneralUser-GS.sf2","preset":0}'
 echo '[{"t":0,"pitch":"C4","dur":1},{"t":1,"pitch":"E4","dur":1},{"t":2,"pitch":"G4","dur":1}]' > notes.json
 codetta set-notes sf2.codetta --track piano --notes-file notes.json
 codetta validate sf2.codetta   # SOUNDFONT_FILE_NOT_FOUND が出なければ OK
@@ -241,10 +241,10 @@ codetta render sf2.codetta --output sf2.wav
 ### Phase 3 (preset discovery)
 
 ```bash
-codetta list-soundfont-presets GeneralUser-GS-v1.471.sf2 | jq '.preset_count'
+codetta list-soundfont-presets GeneralUser-GS.sf2 | jq '.preset_count'
 # → 235 程度 (GeneralUser GS v1.471 標準)
 
-codetta list-soundfont-presets GeneralUser-GS-v1.471.sf2 | jq '.presets[] | select(.bank == 128)'
+codetta list-soundfont-presets GeneralUser-GS.sf2 | jq '.presets[] | select(.bank == 128)'
 # → bank 128 配下の drum kit 一覧 (= 差替候補の探索)
 ```
 
