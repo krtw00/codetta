@@ -13,7 +13,10 @@ use codetta_core::{
     self as core,
     midi::{ExtensionsMode, MidiError, MidiExportOptions, MidiImportOptions, DEFAULT_PPQ},
     migrate::{MigrateError, DEFAULT_SF2},
-    synth::soundfont::{list_soundfont_presets, resolve_soundfont_path, SoundFontError},
+    synth::soundfont::{
+        ensure_bundle_soundfont, list_soundfont_presets, resolve_soundfont_path, SoundFontError,
+        SoundFontParams, BUNDLE_SF2_URL,
+    },
     CodettaError, Effect, Instrument, Note, NoteOp, Song, Track, ValidationError, KNOWN_DRUM_KEYS,
     KNOWN_EFFECT_TYPES, KNOWN_INSTRUMENT_TYPES,
 };
@@ -507,6 +510,30 @@ fn cmd_render(args: RenderArgs, common: &CommonOpts) -> u8 {
         Ok(s) => s,
         Err(e) => return emit_error(&e),
     };
+
+    // bundle SF2 (= file 省略 / DEFAULT_SF2 名) を使う song で、 SF2 が未配置なら自動 DL する
+    // (= installer 経由は SF2 を install しないため、 初回 render で取得する。 09-distribution.md)。
+    // validate より前に行う (= validate が SOUNDFONT_FILE_NOT_FOUND で abort する前に配置するため)。
+    let needs_bundle = song.tracks.iter().any(|t| {
+        t.instrument.kind == "soundfont"
+            && SoundFontParams::from_params(&t.instrument.params)
+                .map(|p| {
+                    std::path::Path::new(&p.file).file_name()
+                        == Some(std::ffi::OsStr::new(DEFAULT_SF2))
+                })
+                .unwrap_or(false)
+    });
+    if needs_bundle {
+        if let Err(e) = ensure_bundle_soundfont() {
+            if !common.quiet {
+                eprintln!("[WARN] bundle SoundFont の自動取得に失敗しました: {e}");
+                eprintln!(
+                    "       手動で {DEFAULT_SF2} を $CODETTA_SOUNDFONT_DIR (既定 ~/Music/sf2/) に配置してください: {BUNDLE_SF2_URL}"
+                );
+            }
+        }
+    }
+
     let (errors, warnings) = partition_validation(core::validate(&song));
     if !errors.is_empty() {
         if !common.quiet {

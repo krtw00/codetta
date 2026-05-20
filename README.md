@@ -12,9 +12,9 @@ MCP (Model Context Protocol) 統合により、AI が一級市民として作曲
 
 ## インストール
 
-> 初版 (`v0.2.0`) Release 公開後に利用できます。配布ビルドには **GeneralUser GS (SF2) を同梱**しているため、別途ダウンロード不要でそのまま音が鳴ります。
+GeneralUser GS (SF2) を**バンドル**しているため、`instrument.params.file` を省略してもそのまま音が鳴ります。配布経路は 2 つ:
 
-**(a) Releases から手動 DL** — [Releases](https://github.com/krtw00/codetta/releases) から OS 別アーカイブ (macOS / Windows / Linux) を取得して解凍し、`bin/codetta` を実行 (PATH に置くと便利)。アーカイブには `codetta` 本体・`assets/GeneralUser-GS.sf2`・ライセンスが同梱されています。
+**(a) Releases から手動 DL** — [Releases](https://github.com/krtw00/codetta/releases) から OS 別アーカイブ (macOS / Windows / Linux) を取得して解凍し、`codetta` を実行 (PATH に置くと便利)。アーカイブには `codetta` 本体・`GeneralUser-GS.sf2`・ライセンスが**同階層に同梱**されているため、解凍後すぐに鳴ります。
 
 **(b) インストーラ (ワンライナー)**
 
@@ -27,6 +27,8 @@ curl --proto '=https' --tlsv1.2 -LsSf https://github.com/krtw00/codetta/releases
 # Windows (PowerShell)
 powershell -c "irm https://github.com/krtw00/codetta/releases/latest/download/codetta-cli-installer.ps1 | iex"
 ```
+
+インストーラはバイナリのみを配置します。bundle SF2 を使う song を**初回 `codetta render` した時点で**、SF2 (約 30MB) を `~/Music/sf2/`（`$CODETTA_SOUNDFONT_DIR`）へ自動ダウンロード (sha256 検証付き) します。2 回目以降は再ダウンロードしません。`curl` が必要です (macOS / Linux / Windows 10+ は標準搭載)。
 
 macOS バイナリは現状 **未署名**です。Gatekeeper に弾かれた場合は `xattr -dr com.apple.quarantine <path>/codetta` で隔離属性を外してください (署名 / notarization は今後対応)。
 

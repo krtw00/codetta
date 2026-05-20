@@ -187,9 +187,10 @@ fn primary_soundfont_path(file: &Path) -> PathBuf {
 /// bundle SF2 を探すディレクトリ候補 (= 配布物のレイアウト、 09-distribution.md)。
 ///
 /// 実行バイナリの位置から導出する:
-/// - GitHub Release アーカイブ: `bin/codetta` の隣 (`<root>/assets/`)
+/// - GitHub Release アーカイブ (dist): `include` ファイルは archive ルート (= バイナリと同階層)
+///   に平坦化されるため `<bin_dir>` 自身を最優先候補にする
 /// - Homebrew: `<prefix>/share/codetta/`
-/// - フラットなアーカイブ構成向けに `<bin_dir>/assets/` も候補に含める
+/// - 念のため `<root>/assets/` (= bin/ の隣) と `<bin_dir>/assets/` も候補に残す
 ///
 /// `current_exe` が取れない環境 (= 一部のサンドボックス) では空 Vec を返す。
 fn bundle_soundfont_dirs() -> Vec<PathBuf> {
@@ -199,13 +200,124 @@ fn bundle_soundfont_dirs() -> Vec<PathBuf> {
     let Some(bin_dir) = exe.parent() else {
         return Vec::new();
     };
-    let mut dirs = Vec::new();
+    let mut dirs = vec![bin_dir.to_path_buf()];
     if let Some(root) = bin_dir.parent() {
         dirs.push(root.join("assets"));
         dirs.push(root.join("share").join("codetta"));
     }
     dirs.push(bin_dir.join("assets"));
     dirs
+}
+
+/// bundle SF2 (= GeneralUser GS v2.0.3) の自前再ホスト URL (= 専用 data Release、 09-distribution.md)。
+/// tag は非バージョン形 (= release.yml の tag trigger に誤マッチしない)。
+pub const BUNDLE_SF2_URL: &str =
+    "https://github.com/krtw00/codetta/releases/download/soundfont-bundle/GeneralUser-GS.sf2";
+
+/// bundle SF2 の固定 sha256 (= immutable asset)。 自動 DL 後にこの値で検証する。
+pub const BUNDLE_SF2_SHA256: &str =
+    "9575028c7a1f589f5770fccc8cff2734566af40cd26ed836944e9a5152688cfe";
+
+#[derive(Debug, Error)]
+pub enum BundleFetchError {
+    #[error("curl コマンドが見つかりません (= bundle SoundFont の自動取得に必要)")]
+    CurlMissing,
+    #[error("bundle SoundFont の download に失敗しました: {0}")]
+    Download(String),
+    #[error("bundle SoundFont の sha256 が一致しません: expected {expected}, got {actual}")]
+    HashMismatch { expected: String, actual: String },
+    #[error("bundle SoundFont の I/O エラー: {0}")]
+    Io(#[from] std::io::Error),
+}
+
+/// bundle SF2 (= [`crate::migrate::DEFAULT_SF2`]) を主 path に用意する (CDT-13)。
+///
+/// cargo-dist の curl installer は include した SF2 を install しないため、 installer 経由では
+/// SF2 がディスクに存在しない。 そこで render 時にこの関数で [`BUNDLE_SF2_URL`] から主 path
+/// (`$CODETTA_SOUNDFONT_DIR` / `~/Music/sf2/`) へ自動 DL する (= 09-distribution.md)。
+///
+/// - 既に主 path に存在すれば即 `Ok` (= 再 DL しない、 何も出力しない)
+/// - 無ければ curl で download し [`BUNDLE_SF2_SHA256`] で sha256 検証して配置する
+/// - curl 不在 / network 失敗 / hash 不一致 は `Err` (= 呼び出し側が手動配置を案内)
+///
+/// DEFAULT_SF2 (= bundle SF2) 専用。 ユーザー指定の任意 SF2 名では呼ばない (= DL URL 不明)。
+pub fn ensure_bundle_soundfont() -> Result<PathBuf, BundleFetchError> {
+    let target = primary_soundfont_path(Path::new(crate::migrate::DEFAULT_SF2));
+    if target.exists() {
+        return Ok(target);
+    }
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    eprintln!(
+        "[INFO] bundle SoundFont ({}) が見つかりません。 {} から取得します (約 30MB、 初回のみ)...",
+        crate::migrate::DEFAULT_SF2,
+        BUNDLE_SF2_URL
+    );
+
+    // 中断時に壊れた SF2 を残さないよう .part に落としてから atomic rename する。
+    let tmp = target.with_file_name(format!(
+        "{}.part",
+        target
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| crate::migrate::DEFAULT_SF2.to_string())
+    ));
+    let status = std::process::Command::new("curl")
+        .args([
+            "--proto",
+            "=https",
+            "--tlsv1.2",
+            "-fSL",
+            "--retry",
+            "3",
+            "-o",
+        ])
+        .arg(&tmp)
+        .arg(BUNDLE_SF2_URL)
+        .status()
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                BundleFetchError::CurlMissing
+            } else {
+                BundleFetchError::Io(e)
+            }
+        })?;
+    if !status.success() {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(BundleFetchError::Download(format!(
+            "curl exited with {status}"
+        )));
+    }
+
+    let actual = sha256_file(&tmp)?;
+    if !actual.eq_ignore_ascii_case(BUNDLE_SF2_SHA256) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(BundleFetchError::HashMismatch {
+            expected: BUNDLE_SF2_SHA256.to_string(),
+            actual,
+        });
+    }
+
+    std::fs::rename(&tmp, &target)?;
+    eprintln!(
+        "[OK] bundle SoundFont を {} に配置しました",
+        target.display()
+    );
+    Ok(target)
+}
+
+/// ファイルの sha256 を 16 進小文字文字列で返す。
+fn sha256_file(path: &Path) -> std::io::Result<String> {
+    use sha2::{Digest, Sha256};
+    let mut file = File::open(path)?;
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut file, &mut hasher)?;
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect())
 }
 
 #[derive(Debug, Error)]
@@ -559,6 +671,54 @@ mod tests {
             dirs.iter().any(|d| d.ends_with("assets")),
             "expected an assets/ candidate, got: {dirs:?}"
         );
+    }
+
+    #[test]
+    fn bundle_dirs_include_bin_dir_itself() {
+        // dist は include ファイルを archive ルート (= バイナリ同階層) に平坦化するため、
+        // bin_dir 自身が候補に含まれる必要がある (= 手動 tarball 解凍で file 省略が動く条件)。
+        let exe = std::env::current_exe().unwrap();
+        let bin_dir = exe.parent().unwrap();
+        let dirs = bundle_soundfont_dirs();
+        assert!(
+            dirs.iter().any(|d| d == bin_dir),
+            "expected bin_dir itself ({}) as a candidate, got: {dirs:?}",
+            bin_dir.display()
+        );
+    }
+
+    #[test]
+    fn sha256_file_matches_known_vector() {
+        // sha256("abc") の既知ベクトル。 自動 DL 後の検証ロジックが正しいことを保証する。
+        let mut path = std::env::temp_dir();
+        path.push(format!("codetta-sha256-test-{}.bin", std::process::id()));
+        std::fs::write(&path, b"abc").unwrap();
+        let got = sha256_file(&path).unwrap();
+        std::fs::remove_file(&path).ok();
+        assert_eq!(
+            got,
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    #[test]
+    fn bundle_sf2_const_sha256_is_64_hex() {
+        // 固定 hash が 64 文字の 16 進であることを保証 (= typo / 桁落ち検知)。
+        assert_eq!(BUNDLE_SF2_SHA256.len(), 64);
+        assert!(BUNDLE_SF2_SHA256.bytes().all(|b| b.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn bundle_fetch_error_display() {
+        assert_eq!(
+            BundleFetchError::HashMismatch {
+                expected: "aa".into(),
+                actual: "bb".into(),
+            }
+            .to_string(),
+            "bundle SoundFont の sha256 が一致しません: expected aa, got bb"
+        );
+        assert!(BundleFetchError::CurlMissing.to_string().contains("curl"));
     }
 
     #[test]

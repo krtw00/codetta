@@ -50,17 +50,28 @@ SF2 ファイル (= GeneralUser GS v2.0.3、 約 30 MB) をリポジトリに **
 | git submodule で外部 SF2 リポを参照 | DL 元が外部依存になり URL 変更リスクがある。 Homebrew formula より管理が重い |
 | `cargo install` 時に build.rs で自動 DL | ビルド時のネットワーク依存は `cargo install --offline` を壊す。 Rust ポリシーとして推奨されない |
 
-### SF2 の検索パス
+### SF2 の検索パス (= CDT-13 実装確定)
 
-実行時に SF2 を探す順序:
+実行時に相対 SF2 file を探す順序 (= `soundfont.rs::resolve_soundfont_path`、 上の速報的 5 段は本実装で置換):
 
-1. `--sf2 <path>` CLI オプション / `CODETTA_SF2` 環境変数 (= ユーザー指定を最優先)
-2. `$CODETTA_WORKSPACE/soundfonts/` (= 既定 workspace、 `~/Music/codetta/soundfonts/`)
-3. バイナリ隣の `assets/` ディレクトリ (= Release アーカイブ展開後の相対パス)
-4. Homebrew prefix 配下 `share/codetta/` (= `brew install` 経由の場合)
-5. 上記すべて見つからなければエラー + ガイドメッセージ (= DL 先 URL + `codetta setup` サブコマンドの案内)
+1. **主 path** = `$CODETTA_SOUNDFONT_DIR/<file>` (env 設定時) / 未設定なら `$HOME/Music/sf2/<file>`
+2. **bundle dirs** (= `bundle_soundfont_dirs`、 配布物レイアウト): `<bin_dir>` 自身 → `<root>/assets/` → `<prefix>/share/codetta/` → `<bin_dir>/assets/`
+3. どれも無ければ主 path を返す (= `SOUNDFONT_FILE_NOT_FOUND` がユーザー向け配置先を指す)
 
-検索パス確定は Phase 4 着手時に実装で最終確認。 `codetta setup` サブコマンドは Phase 4 着手時に要否判断する (= SF2 を 1 コマンドで DL するだけなら curl + mv で代替できるため、 必須ではない可能性あり)。
+絶対 path はそのまま使う (env / bundle 無関係)。
+
+### bundle SF2 の実行時自動 DL (= CDT-13 実装確定)
+
+**問題**: cargo-dist の curl installer (`installer.sh` / `.ps1`) は **バイナリしか install せず、 `include` した SF2 を破棄する** (= 実機確証)。 tarball 手動解凍では SF2 がバイナリ隣に残るが、 installer ワンライナー経由では SF2 がディスクに存在しない → 「初回体験 1 コマンド」 が成立しない。
+
+**決定**: `codetta render` 実行時、 song が bundle SF2 (= `DEFAULT_SF2` 名) を要求し、 かつ検索パスで見つからない場合に、 専用 data Release (`soundfont-bundle`) から **主 path へ自動 DL** する。 これにより installer 経由でも初回 render で鳴る。
+
+- **トリガ**: render 時のみ (= `validate` は純粋に not-found を報告; core `render_to_buffer` も純粋に保ち、 DL は CLI `render` ハンドラが song 検査して実行 → MCP は CLI spawn で継承)
+- **対象**: `DEFAULT_SF2` (= bundle SF2) のみ。 ユーザー指定の任意 SF2 名は DL しない (= URL 不明)
+- **配置先**: 主 path (`$CODETTA_SOUNDFONT_DIR` / `~/Music/sf2/`)。 次回以降は主 path で即解決し再 DL しない
+- **機構**: `curl` を spawn (= 新規 TLS/HTTP crate を足さず license gate を汚さない、 build-setup.yml と同じ手段)。 DL 後に `sha2` crate で sha256 検証 (= immutable asset、 固定 hash)
+- **失敗時**: curl 不在 / network 不通 / hash 不一致 なら `[WARN]` + 手動配置ガイド (= 配置先 + DL URL) を出す。 その後 validate が `SOUNDFONT_FILE_NOT_FOUND` を報告して render は中止する (= ユーザーは案内に従い手動配置)。 自動 DL 失敗自体は panic させない
+- **却下**: `include_bytes!` 埋め込み (= ADR 既定で却下、 +30MB×4)、 build.rs DL (= `cargo install --offline` を壊す、 既定で却下)、 explicit `codetta setup` サブコマンド (= 透過自動 DL で UX 上不要)
 
 ## GitHub Release バイナリ
 
@@ -78,15 +89,18 @@ Windows は `x86_64-pc-windows-msvc` (= MSVC ツールチェーン) を採用。
 ### アーカイブ構成
 
 ```
-codetta-<version>-aarch64-apple-darwin.tar.gz
-└── codetta-<version>-aarch64-apple-darwin/
-    ├── bin/
-    │   └── codetta                         # CLI バイナリ
-    ├── assets/
-    │   └── GeneralUser-GS.sf2              # bundle SF2
-    ├── LICENSE                             # Apache 2.0 (codetta 本体)
-    └── LICENSE-GeneralUser-GS.txt          # SF2 のライセンス
+codetta-cli-aarch64-apple-darwin.tar.gz
+└── codetta-cli-aarch64-apple-darwin/
+    ├── codetta                            # CLI バイナリ (= archive ルート直下)
+    ├── GeneralUser-GS.sf2                 # bundle SF2 (= dist include で archive ルートに平坦化)
+    ├── LICENSE                            # Apache 2.0 (codetta 本体)
+    ├── LICENSE-GeneralUser-GS.txt         # SF2 のライセンス
+    └── README.md
 ```
+
+> **実装注記 (CDT-13, 2026-05-21 実機確認)**: cargo-dist の `include` はファイルを
+> archive **ルート (= バイナリと同階層)** に平坦化する (`bin/` / `assets/` サブディレクトリは作らない)。
+> このため bundle SF2 解決は `<bin_dir>` 自身を最優先候補にする (= `soundfont.rs::bundle_soundfont_dirs`)。
 
 MCP server (`mcp-server/`) は GitHub Release には同梱しない。 MCP server は別途 `npm install` / `git clone` + `npm run build` で導入する想定 (= Claude Code の `claude mcp add` と組み合わせる運用)。 Phase 4 では MCP server の配布フローを `README.md` に明示する。
 
@@ -165,7 +179,7 @@ Homebrew formula の `resource` ブロックに使う SF2 URL は以下の候補
 | GitHub Release artifact の直リンク | 追加インフラ不要 | GitHub Release URL は sha256 固定で問題なし。 ただし URL が長い |
 | SourceForge / 公式サイト直リンク | 追加インフラ不要 | 外部サイト URL 変更リスク。 sha256 検証で破損は検知可能だが URL 自体が消える可能性 |
 
-**決定 (CDT-13 前提確認、 2026-05-21): 自前再ホスト**。 `GeneralUser-GS.sf2` (v2.0.3、 30.8MB) を自リポの専用 data Release (= tag 例 `assets-sf2-v2.0.3`) に 1 度だけ upload し、 Release archive ビルドも Homebrew `resource` もこの immutable URL + 固定 sha256 を参照する。
+**決定 (CDT-13、 2026-05-21): 自前再ホスト**。 `GeneralUser-GS.sf2` (v2.0.3、 30.8MB) を自リポの専用 data Release (= tag `soundfont-bundle`) に 1 度だけ upload 済み。 Release archive ビルド (build-setup.yml)・実行時自動 DL・Homebrew `resource` すべてこの immutable URL + 固定 sha256 (`9575028c7a1f589f5770fccc8cff2734566af40cd26ed836944e9a5152688cfe`) を参照する。 tag は**非バージョン形** (= `release.yml` の tag trigger `**[0-9]+.[0-9]+.[0-9]+*` に誤マッチして release workflow を起動しないため)。
 
 理由 / 補足:
 
@@ -254,7 +268,7 @@ Phase 4 着手時にドメイン取得状況を確認して最終決定する。
 - [ ] **Apple Developer Program 加入状況** — 加入済 (2026-05、 **反映待ち**)。 Developer ID 証明書が使えるようになり次第 GitHub Secrets に格納し、 CDT-13 で sign/notarize 込みの release workflow を一括実装する (= 反映までは CDT-13 本体を保留)
 - [x] **SF2 配布 URL** — **自前再ホスト** に決定 (= 自リポの専用 data Release に SF2 を upload、 上述「SF2 の配布 URL」 参照)
 - [ ] **Windows クロスビルドの動作確認** — `cross` + `x86_64-pc-windows-msvc` target でビルドできるか、 `rustysynth` / `hound` との相性確認が必要
-- [ ] **`codetta setup` サブコマンドの要否** — SF2 を 1 コマンドで DL するサブコマンドを設けるか、 `README.md` のガイドだけで十分か (= Phase 4 着手時に体験して判断)
+- [x] **`codetta setup` サブコマンドの要否** — **不要**。 render 時の透過的自動 DL (= 上述「bundle SF2 の実行時自動 DL」) で代替し、 explicit subcommand は設けない (= MCP tool ペア追加も不要)
 - [ ] **MCP server の配布フロー** — `mcp-server/` は Release アーカイブに含めず `npm install` / `git clone` + build 運用とする想定だが、 エンドユーザー向けに `npx` ベース or `@krtw00/codetta-mcp` npm package 公開が現実的か確認
 - [ ] **`homebrew-codetta` リポジトリの公開タイミング** — CLI バイナリ公開と同時か、 少し遅らせるか (= 依存: tap formula の SHA256 は Release artifact 確定後に書ける)
 - [ ] **JSON Schema ホスト先確定** — `codetta.dev` ドメイン取得 + Cloudflare Pages 設定 (= 暫定採用、 上述「JSON Schema 公開」 参照)
@@ -269,6 +283,8 @@ Phase 4 着手時にドメイン取得状況を確認して最終決定する。
 - [x] **バージョニング** → **Semantic Versioning `v0.*.*` から開始**
 - [x] **MCP server の Release 同梱** → **しない** (= 別途 npm 系で導入する運用)
 - [x] **ライセンス** → **本体 Apache 2.0 + bundle SF2 に GeneralUser GS License v2.0 を別添**
+- [x] **配布チャネルの実装** → **cargo-dist (`dist`)** で release.yml 生成 (= shell / powershell installer + 4 platform archive)
+- [x] **bundle SF2 の installer 経路問題** → **render 時の実行時自動 DL** で解決 (= installer は SF2 を install しないため。 上述「bundle SF2 の実行時自動 DL」 参照)
 
 ## 関連ドキュメント
 
