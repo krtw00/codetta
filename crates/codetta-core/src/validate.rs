@@ -400,17 +400,20 @@ mod tests {
     }
 
     #[test]
-    fn soundfont_track_requires_file_param() {
+    fn soundfont_track_defaults_file_when_omitted() {
+        // CDT-12: file 省略は schema error にならず、 bundle SF2 (DEFAULT_SF2) にフォールバックする。
+        // (resolved path の存在可否は環境依存なので、 ここでは schema error が出ないことのみ確認)
         let mut s = ok_song();
         let mut inst = Instrument::new("soundfont");
-        // file 省略
+        // file 省略 (preset のみ)
         inst.params.insert("preset".into(), serde_json::json!(0));
         s.tracks[0].instrument = inst;
         let errs = validate(&s);
         assert!(
-            errs.iter()
+            !errs
+                .iter()
                 .any(|e| e.code == "INVALID_SCHEMA" && e.path.ends_with(".instrument.params")),
-            "expected missing-file error, got: {errs:?}"
+            "file omission must not be a schema error (defaults to bundle SF2): {errs:?}"
         );
     }
 

@@ -17,7 +17,7 @@
 | `list-soundfont-presets` / `codetta://soundfonts/{name}` resource | ✅ |
 | ドラム track での `pitch: "kick"` 等 (SF2 経路) | ✅ CDT-5 — `synth::soundfont::DRUM_KEY_MIDI_MAP` 正本で要素名キー / MIDI / ノート名のいずれも受付 |
 | `migrate` (CDT-6) | ✅ 0.1 → 0.2 LUT 変換 (内蔵 synth → SF2 preset) |
-| bundle 配布 SF2 | 未実装 (Phase 4 計画 — `GeneralUser-GS-v2.0.3.sf2` 約 30MB 同梱、 09-distribution.md で確定予定) |
+| bundle 配布 SF2 (`file` 省略時 fallback) | ✅ コード側実装済 (CDT-12) — `file` 省略時に bundle SF2 を resolve。 SF2 バイナリ (約 30MB) の物理同梱は Release / Homebrew 配布物側 (CDT-13/14)、 同梱 version は v2.0.3 予定 (= 09-distribution.md)。 現状の default 名は dogfood と一致する `GeneralUser-GS-v1.471.sf2` |
 
 ## 立ち位置
 
@@ -45,8 +45,7 @@
 | マイルストーン | 内容 | Phase |
 |---|---|---|
 | MIDI import / export | GM Program → SF2 preset マッピング、 ドラム channel 10 → bank 128、 拡張属性 (`master_gain` / fx / SF2 preset 詳細) の Text Meta Event 埋め込み or sidecar JSON 往復 | 3 |
-| bundle SF2 配布 | 配布バイナリに `GeneralUser-GS-v2.0.3.sf2` を bundle (= 配布手段は build.rs / include_bytes! / cargo install hook 等から 09-distribution.md で選定)、 README に DL 不要記載 | 4 |
-| README に SF2 download 手順 (bundle 未取得時 fallback) | bundle 取得失敗時 / ソースビルド時のために、 推奨 OSS SF2 一覧と DL 手順を README に追加 | 4 |
+| bundle SF2 物理同梱 | 配布アーカイブ (GitHub Release `.tar.gz` の `assets/`、 Homebrew `share/codetta/`) に `GeneralUser-GS-v2.0.3.sf2` を同梱 (= SF2 はリポジトリに git-track しない、 09-distribution.md 決着済)。 `file` 省略時 fallback の **コード側**は CDT-12 で実装済 | 4 (CDT-13/14) |
 | GUI 連携 (リアルタイム再生 / preset プレビュー) | GUI 側で SF2 を load しっぱなしにし、 piano roll 操作で随時 audition できるよう設計 | 5 |
 
 ## Instrument スキーマ (= 02-project-format.md と同期)
@@ -72,9 +71,14 @@
 
 `$CODETTA_WORKSPACE` (= `.codetta` 用) と同じ env pattern。 MCP server は環境変数を継承する。
 
-### Bundle SF2 (Phase 4 後の default)
+### Bundle SF2 (`file` 省略時の暗黙 default)
 
-Phase 4 配布整備で `GeneralUser-GS-v2.0.3.sf2` (約 30MB) を bundle 同梱予定。 `file` 省略時の暗黙 default として扱う計画 (= 09-distribution.md で確定)。
+`file` 省略時は bundle SF2 を暗黙 default として解決する (= CDT-12 実装済):
+
+- `SoundFontParams::from_params` が `file` 欠落時に `DEFAULT_SF2` (現状 `GeneralUser-GS-v1.471.sf2`) を充てる
+- `resolve_soundfont_path` が相対 path をユーザー指定 dir (`$CODETTA_SOUNDFONT_DIR`、 default `~/Music/sf2/`) → bundle SF2 dir (Release アーカイブの `assets/`、 Homebrew prefix の `share/codetta/`) の順で探し、 最初に存在するものを使う
+
+SF2 バイナリ (約 30MB) 自体は **リポジトリに git-track せず**、 Release / Homebrew 配布物にのみ同梱する (= 09-distribution.md 決着済)。 同梱 version は v2.0.3 を予定するが、 default 名の v1.471 → v2.0.3 移行は Release タイミングで実施する (= CDT-13/14、 examples / tests / `DEFAULT_SF2` を一括更新)。
 
 ## Render path
 
@@ -188,11 +192,11 @@ GeneralUser GS / GM 互換 SF2 で頻用する preset 一覧。 02 / 03 / 06 で
 - GitHub mirror: <https://github.com/mrbumpy409/GeneralUser-GS>
 - ライセンス全文: <https://raw.githubusercontent.com/mrbumpy409/GeneralUser-GS/main/documentation/LICENSE.txt>
 
-配布物のレイアウト (= 01-architecture.md repo 構成参照):
+配布アーカイブのレイアウト (= GitHub Release `.tar.gz` / Homebrew、 09-distribution.md 参照):
 
-- `LICENSE` — Apache 2.0 (Codetta 本体)
-- `LICENSE-GeneralUser-GS.txt` — GeneralUser GS License v2.0 (bundle SF2 の license)
-- `assets/GeneralUser-GS.sf2` — Phase 4 で同梱 (約 30MB)
+- `LICENSE` — Apache 2.0 (Codetta 本体、 リポジトリ root にも commit 済)
+- `LICENSE-GeneralUser-GS.txt` — GeneralUser GS License v2.0 (bundle SF2 の license、 ✅ CDT-12 でリポジトリ root に追加済)
+- `assets/GeneralUser-GS.sf2` — bundle SF2 (約 30MB)。 **リポジトリには git-track せず**、 Release / Homebrew 配布物にのみ同梱する (CDT-13/14)
 
 `rustysynth` の license は MIT (= Codetta の Apache 2.0 と互換)。
 
@@ -246,8 +250,8 @@ codetta list-soundfont-presets GeneralUser-GS-v1.471.sf2 | jq '.presets[] | sele
 
 ## オープンクエスチョン
 
-- [ ] bundle SF2 配布手段 (= binary 埋め込み `include_bytes!` / `cargo install` 時 DL / homebrew formula 経由 / GitHub Release `.tar.gz` 同梱) のどれにするか → Phase 4 (09-distribution.md で確定)
-- [ ] bundle SF2 の version を v1.471 (現 dogfood) と v2.0.3 (= license / 動作両面で最新) のどちらに固定するか → Phase 4 で実機検証して決定。 doc では「v2.0.3」 を仮置きしている
+- [x] bundle SF2 配布手段 → **GitHub Release `.tar.gz` の `assets/` 同梱 + Homebrew `resource` DL** で決着 (= SF2 は git-track せず、 `include_bytes!` も却下。 09-distribution.md「bundle SF2 の配布戦略」)。 `file` 省略時 fallback のコード側は CDT-12 で実装済
+- [x] bundle SF2 の version → **v2.0.3** に決定 (09-distribution.md L256)。 ただし CDT-12 実装段階では default 名を dogfood と一致する `v1.471` に据え置き、 v2.0.3 への移行は Release タイミング (CDT-13/14) で `DEFAULT_SF2` / examples / tests を一括更新する
 - [ ] GUI (Phase 5) で SF2 を audio thread で持つときの lock-free 戦略 (= `Arc<SoundFont>` を audio thread に渡す + GUI thread から preset 切替 を `process_midi_message` で投げる構造) の詳細設計 → Phase 5 開始時に詰める
 - [ ] ユーザーが SF2 を差替えた時のキャッシュ invalidation (= 同 path で内容変わった場合の検知) → 当面 PID lifetime キャッシュなので問題化したら検討
 

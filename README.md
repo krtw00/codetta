@@ -33,7 +33,9 @@ Claude Desktop 用設定、tool / resource 一覧、smoke test の手順等は *
 
 ## SoundFont (.sf2) を使う
 
-内蔵音源 (`sin` / `saw` / `square` / `triangle` / `saw_pad` / `drum_kit`) では届かないピアノ / 弦 / ブラス等の生楽器音色は、外部 SoundFont (`.sf2`) を持ち込んで補えます。Codetta 本体には SF2 を同梱しないため、ユーザー自身で OSS SF2 を取得して配置してください。
+Codetta の音源は外部 SoundFont (`.sf2`) です (schema 0.2 で内蔵 synth は撤去済)。**配布ビルド (GitHub Release / Homebrew) には GeneralUser GS を同梱**しているため、ダウンロード不要でそのまま `codetta render` が鳴ります。`instrument.params.file` を省略すると、この同梱 SF2 (bundle SF2) が暗黙の default として解決されます。
+
+ソースから `cargo build` した場合は SF2 を同梱しないため (= リポジトリに git-track しない方針 / `docs/design/09-distribution.md`)、別の SF2 を使いたい場合や bundle 未配備の環境では、ユーザー自身で OSS SF2 を取得して配置してください (下記)。
 
 ### 1. SF2 ファイルを取得
 
@@ -120,4 +122,5 @@ codetta list-soundfont-presets GeneralUser-GS-v1.471.sf2 | jq '.presets[] | sele
 
 ## ライセンス
 
-[Apache License 2.0](LICENSE)
+- Codetta 本体: [Apache License 2.0](LICENSE)
+- 同梱 SoundFont (GeneralUser GS): [GeneralUser GS License v2.0](LICENSE-GeneralUser-GS.txt) — 商業利用・改変・再配布可。配布ビルドに bundle される SF2 に適用される

@@ -68,7 +68,7 @@ pub struct SoundFontParams {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SoundFontParamsError {
-    MissingFile,
+    InvalidFileType,
     EmptyFile,
     InvalidPreset(String),
     InvalidBank(String),
@@ -77,7 +77,7 @@ pub enum SoundFontParamsError {
 impl std::fmt::Display for SoundFontParamsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::MissingFile => write!(f, "soundfont params.file is required"),
+            Self::InvalidFileType => write!(f, "soundfont params.file must be a string"),
             Self::EmptyFile => write!(f, "soundfont params.file must be non-empty"),
             Self::InvalidPreset(s) => write!(f, "soundfont params.preset must be 0..=127, got {s}"),
             Self::InvalidBank(s) => write!(f, "soundfont params.bank must be 0..=128, got {s}"),
@@ -92,15 +92,19 @@ impl SoundFontParams {
     pub const DEFAULT_PRESET: u16 = 0;
 
     pub fn from_params(params: &Map<String, Value>) -> Result<Self, SoundFontParamsError> {
-        let file = params
-            .get("file")
-            .ok_or(SoundFontParamsError::MissingFile)?
-            .as_str()
-            .ok_or(SoundFontParamsError::MissingFile)?
-            .to_string();
-        if file.is_empty() {
-            return Err(SoundFontParamsError::EmptyFile);
-        }
+        // `file` 省略時は bundle SF2 (= DEFAULT_SF2) にフォールバックする (CDT-12)。
+        // 配布物では bundle SF2 が Release アーカイブ / Homebrew prefix に同梱され、
+        // resolve_soundfont_path が解決する (= 09-distribution.md)。
+        let file = match params.get("file") {
+            None => crate::migrate::DEFAULT_SF2.to_string(),
+            Some(v) => {
+                let s = v.as_str().ok_or(SoundFontParamsError::InvalidFileType)?;
+                if s.is_empty() {
+                    return Err(SoundFontParamsError::EmptyFile);
+                }
+                s.to_string()
+            }
+        };
 
         let preset = match params.get("preset") {
             None => Self::DEFAULT_PRESET,
@@ -132,16 +136,41 @@ impl SoundFontParams {
     }
 }
 
-/// `$CODETTA_SOUNDFONT_DIR` (default: `$HOME/Music/sf2/`) で SF2 path を解決する。
+/// SF2 path を解決する。 相対 path はユーザー指定 dir → bundle SF2 の順で探す (CDT-12)。
 ///
-/// - 絶対 path: そのまま (env 無関係)
-/// - 相対 path: `$CODETTA_SOUNDFONT_DIR/<file>` (env 未設定なら `$HOME/Music/sf2/<file>`)
-/// - `$HOME` も取れなければ相対 path をそのまま返す (CWD 基準扱い)
+/// - 絶対 path: そのまま (env / bundle 無関係)
+/// - 相対 path: 次の候補を順に探し、 **最初に存在するもの** を返す:
+///   1. 主 path = `$CODETTA_SOUNDFONT_DIR/<file>` (env 設定時) または `$HOME/Music/sf2/<file>`
+///   2. bundle SF2 ([`bundle_soundfont_dirs`] 参照) — Release アーカイブの `assets/`、
+///      Homebrew prefix の `share/codetta/`
+///
+/// どれも存在しなければ主 path (= ユーザーが配置すべき場所) を返す。 これにより
+/// `SOUNDFONT_FILE_NOT_FOUND` のメッセージが bundle 内部ではなくユーザー向けの場所を指す。
+///
+/// bundle SF2 はリポジトリに git-track せず、 配布物 (Release / Homebrew) にのみ同梱される
+/// (= 09-distribution.md 決着済)。
 pub fn resolve_soundfont_path(file: impl AsRef<Path>) -> PathBuf {
     let file = file.as_ref();
     if file.is_absolute() {
         return file.to_path_buf();
     }
+    let primary = primary_soundfont_path(file);
+    if primary.exists() {
+        return primary;
+    }
+    for dir in bundle_soundfont_dirs() {
+        let candidate = dir.join(file);
+        if candidate.exists() {
+            return candidate;
+        }
+    }
+    primary
+}
+
+/// 相対 SF2 file の主 path (= ユーザーが配置する場所)。
+/// `$CODETTA_SOUNDFONT_DIR` 設定時はそれ、 未設定なら `$HOME/Music/sf2/`、
+/// `$HOME` も取れなければ相対 path をそのまま (CWD 基準扱い)。
+fn primary_soundfont_path(file: &Path) -> PathBuf {
     if let Ok(dir) = std::env::var("CODETTA_SOUNDFONT_DIR") {
         if !dir.is_empty() {
             return PathBuf::from(dir).join(file);
@@ -153,6 +182,30 @@ pub fn resolve_soundfont_path(file: impl AsRef<Path>) -> PathBuf {
         }
     }
     file.to_path_buf()
+}
+
+/// bundle SF2 を探すディレクトリ候補 (= 配布物のレイアウト、 09-distribution.md)。
+///
+/// 実行バイナリの位置から導出する:
+/// - GitHub Release アーカイブ: `bin/codetta` の隣 (`<root>/assets/`)
+/// - Homebrew: `<prefix>/share/codetta/`
+/// - フラットなアーカイブ構成向けに `<bin_dir>/assets/` も候補に含める
+///
+/// `current_exe` が取れない環境 (= 一部のサンドボックス) では空 Vec を返す。
+fn bundle_soundfont_dirs() -> Vec<PathBuf> {
+    let Ok(exe) = std::env::current_exe() else {
+        return Vec::new();
+    };
+    let Some(bin_dir) = exe.parent() else {
+        return Vec::new();
+    };
+    let mut dirs = Vec::new();
+    if let Some(root) = bin_dir.parent() {
+        dirs.push(root.join("assets"));
+        dirs.push(root.join("share").join("codetta"));
+    }
+    dirs.push(bin_dir.join("assets"));
+    dirs
 }
 
 #[derive(Debug, Error)]
@@ -479,11 +532,32 @@ mod tests {
     }
 
     #[test]
-    fn params_required_file() {
+    fn params_defaults_file_when_omitted() {
+        // `file` 省略時は bundle SF2 (DEFAULT_SF2) にフォールバックする (CDT-12)。
         let m = Map::new();
+        let p = SoundFontParams::from_params(&m).unwrap();
+        assert_eq!(p.file, crate::migrate::DEFAULT_SF2);
+        assert_eq!(p.preset, 0);
+        assert_eq!(p.bank, 0);
+    }
+
+    #[test]
+    fn params_rejects_non_string_file() {
+        let mut m = Map::new();
+        m.insert("file".into(), json!(123));
         assert_eq!(
             SoundFontParams::from_params(&m).unwrap_err(),
-            SoundFontParamsError::MissingFile
+            SoundFontParamsError::InvalidFileType
+        );
+    }
+
+    #[test]
+    fn bundle_dirs_include_assets_candidate() {
+        // current_exe が取れる test 環境では assets/ 候補を含む (= Release レイアウト)。
+        let dirs = bundle_soundfont_dirs();
+        assert!(
+            dirs.iter().any(|d| d.ends_with("assets")),
+            "expected an assets/ candidate, got: {dirs:?}"
         );
     }
 
