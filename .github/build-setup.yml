@@ -6,12 +6,13 @@
 # archive を組む前にここで download して assets/ に配置する。 dist は include = ["assets/GeneralUser-GS.sf2"]
 # でこれを archive ルートに同梱する。
 #
-# URL は自前再ホスト (= 専用 data Release の immutable asset)。 この Release / asset は
-# CDT-13 着手者が手動で 1 度作成・upload する前提 (= 未作成だとこのステップで 404)。
+# URL は自前再ホスト (= 専用 data Release `soundfont-bundle` の immutable asset)。
+# tag は意図的に非バージョン形 (= release.yml の tag trigger `**[0-9]+.[0-9]+.[0-9]+*` に
+# マッチさせないため。 `v2.0.3` 等の形だと release workflow を誤起動する)。
 # expected sha256: 9575028c7a1f589f5770fccc8cff2734566af40cd26ed836944e9a5152688cfe
 - name: Download bundle SoundFont (GeneralUser GS v2.0.3)
   shell: bash
   run: |
     mkdir -p assets
     curl --proto '=https' --tlsv1.2 -fSL --retry 3 -o assets/GeneralUser-GS.sf2 \
-      "https://github.com/krtw00/codetta/releases/download/assets-sf2-v2.0.3/GeneralUser-GS.sf2"
+      "https://github.com/krtw00/codetta/releases/download/soundfont-bundle/GeneralUser-GS.sf2"

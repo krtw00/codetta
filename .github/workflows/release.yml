@@ -131,7 +131,7 @@ jobs:
         run: |
           mkdir -p assets
           curl --proto '=https' --tlsv1.2 -fSL --retry 3 -o assets/GeneralUser-GS.sf2 \
-            "https://github.com/krtw00/codetta/releases/download/assets-sf2-v2.0.3/GeneralUser-GS.sf2"
+            "https://github.com/krtw00/codetta/releases/download/soundfont-bundle/GeneralUser-GS.sf2"
         shell: "bash"
       - name: Install dist
         run: ${{ matrix.install_dist.run }}
