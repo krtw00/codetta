@@ -8,7 +8,7 @@
 
 1. **初回体験を 1 コマンドで完結させる** — bundle SF2 を同梱し、 インストール直後に `codetta render` が鳴る
 2. **配布手段は 2 本立て** — Homebrew tap (Mac / Linux) + GitHub Release バイナリ (Mac / Windows / Linux)
-3. **バイナリサイズを抑える** — 本体 < 25 MB、 bundle SF2 込み < 60 MB (= 01-architecture.md 非機能要件)
+3. **バイナリサイズを抑える** — 本体 < 25 MB、 bundle SF2 込み < 60 MB (= 01-architecture.md 非機能要件)。 CDT-13 前提確認 (2026-05-21) 実測: release binary 1.7MB + SF2 30.8MB ≈ 32.5MB/archive で予算内
 4. **ライセンス開示を自動化する** — bundle SF2 (GeneralUser GS) は Apache 2.0 本体と別ライセンス、 インストール時に両方を置く
 5. **署名は macOS のみ必須、 他は任意** — macOS は Gatekeeper で弾かれるため notarize 必須。 Windows / Linux は Phase 4 では ad-hoc またはスキップ (= 後述「署名戦略」 参照)
 
@@ -165,7 +165,15 @@ Homebrew formula の `resource` ブロックに使う SF2 URL は以下の候補
 | GitHub Release artifact の直リンク | 追加インフラ不要 | GitHub Release URL は sha256 固定で問題なし。 ただし URL が長い |
 | SourceForge / 公式サイト直リンク | 追加インフラ不要 | 外部サイト URL 変更リスク。 sha256 検証で破損は検知可能だが URL 自体が消える可能性 |
 
-**暫定採用: GitHub Release artifact の直リンク**。 理由: 追加インフラ不要で sha256 検証が効く。 `dl.codetta.dev` ミラーは需要が出てから検討。
+**決定 (CDT-13 前提確認、 2026-05-21): 自前再ホスト**。 `GeneralUser-GS.sf2` (v2.0.3、 30.8MB) を自リポの専用 data Release (= tag 例 `assets-sf2-v2.0.3`) に 1 度だけ upload し、 Release archive ビルドも Homebrew `resource` もこの immutable URL + 固定 sha256 を参照する。
+
+理由 / 補足:
+
+- GitHub Release asset は publish 後 immutable なので sha256 が固定でき、 Homebrew formula が upstream 更新で壊れない
+- GeneralUser GS License v2.0 は「自分のローカルコピーの再配布」 を許可 (= 公式サイトへの直リンクのみ禁止) → 自前再ホストは license clean
+- seed 元: GitHub mirror `mrbumpy409/GeneralUser-GS` repo root の `GeneralUser-GS.sf2` (= v2.0.3、 30.8MB)。 mirror の `main` raw URL は mutable なので、 初回 seed は commit SHA pin で取得して自 Release に上げる
+- `dl.codetta.dev` 自前 CDN は不要 (= 需要が出てから再検討)
+- 実 upload + tag リリースは CDT-13 本体着手時 (= Apple Dev 反映後の一括実装) に行う
 
 ## macOS 署名戦略
 
@@ -243,8 +251,8 @@ Phase 4 着手時にドメイン取得状況を確認して最終決定する。
 
 ## オープンクエスチョン (= Phase 4 着手時に決定)
 
-- [ ] **Apple Developer Program 加入状況** — 未加入の場合は Phase 4 開始前に手続き (= 手続きに数日かかる場合あり)
-- [ ] **SF2 配布 URL** — GitHub Release 直リンク vs `dl.codetta.dev` 自前 CDN (= 暫定は Release 直リンク、 上述「SF2 の配布 URL」 参照)
+- [ ] **Apple Developer Program 加入状況** — 加入済 (2026-05、 **反映待ち**)。 Developer ID 証明書が使えるようになり次第 GitHub Secrets に格納し、 CDT-13 で sign/notarize 込みの release workflow を一括実装する (= 反映までは CDT-13 本体を保留)
+- [x] **SF2 配布 URL** — **自前再ホスト** に決定 (= 自リポの専用 data Release に SF2 を upload、 上述「SF2 の配布 URL」 参照)
 - [ ] **Windows クロスビルドの動作確認** — `cross` + `x86_64-pc-windows-msvc` target でビルドできるか、 `rustysynth` / `hound` との相性確認が必要
 - [ ] **`codetta setup` サブコマンドの要否** — SF2 を 1 コマンドで DL するサブコマンドを設けるか、 `README.md` のガイドだけで十分か (= Phase 4 着手時に体験して判断)
 - [ ] **MCP server の配布フロー** — `mcp-server/` は Release アーカイブに含めず `npm install` / `git clone` + build 運用とする想定だが、 エンドユーザー向けに `npx` ベース or `@krtw00/codetta-mcp` npm package 公開が現実的か確認
