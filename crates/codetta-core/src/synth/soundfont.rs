@@ -230,22 +230,26 @@ pub enum BundleFetchError {
     Io(#[from] std::io::Error),
 }
 
-/// bundle SF2 (= [`crate::migrate::DEFAULT_SF2`]) を主 path に用意する (CDT-13)。
+/// bundle SF2 (= [`crate::migrate::DEFAULT_SF2`]) を解決可能にする (CDT-13)。
 ///
 /// cargo-dist の curl installer は include した SF2 を install しないため、 installer 経由では
 /// SF2 がディスクに存在しない。 そこで render 時にこの関数で [`BUNDLE_SF2_URL`] から主 path
 /// (`$CODETTA_SOUNDFONT_DIR` / `~/Music/sf2/`) へ自動 DL する (= 09-distribution.md)。
 ///
-/// - 既に主 path に存在すれば即 `Ok` (= 再 DL しない、 何も出力しない)
-/// - 無ければ curl で download し [`BUNDLE_SF2_SHA256`] で sha256 検証して配置する
+/// - 既に検索パスで解決できれば即 `Ok` (= [`resolve_soundfont_path`] が 主 path / bundle dirs を
+///   見る。 tarball はバイナリ隣に同梱済みなのでここで返り、 無駄な DL をしない)
+/// - 解決できなければ (= installer 経路など SF2 不在) curl で主 path へ download し
+///   [`BUNDLE_SF2_SHA256`] で sha256 検証して配置する
 /// - curl 不在 / network 失敗 / hash 不一致 は `Err` (= 呼び出し側が手動配置を案内)
 ///
 /// DEFAULT_SF2 (= bundle SF2) 専用。 ユーザー指定の任意 SF2 名では呼ばない (= DL URL 不明)。
 pub fn ensure_bundle_soundfont() -> Result<PathBuf, BundleFetchError> {
-    let target = primary_soundfont_path(Path::new(crate::migrate::DEFAULT_SF2));
-    if target.exists() {
-        return Ok(target);
+    // 主 path / bundle dirs (= tarball のバイナリ隣など) で既に解決できるなら DL しない。
+    let resolved = resolve_soundfont_path(Path::new(crate::migrate::DEFAULT_SF2));
+    if resolved.exists() {
+        return Ok(resolved);
     }
+    let target = primary_soundfont_path(Path::new(crate::migrate::DEFAULT_SF2));
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent)?;
     }
