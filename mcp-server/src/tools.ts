@@ -132,9 +132,10 @@ export function registerTools(server: McpServer): void {
           .describe("BPM (default 120)"),
         key: z.string().optional().describe("調 (例: 'Am', 'C', default 'C')"),
         time_signature: z
-          .tuple([z.number().int().positive(), z.number().int().positive()])
+          .array(z.number().int().positive())
+          .length(2)
           .optional()
-          .describe("拍子 [N, D] (default [4, 4])"),
+          .describe("拍子 [N, D] 2 要素配列 (default [4, 4])"),
         master_gain: z
           .number()
           .min(0)
