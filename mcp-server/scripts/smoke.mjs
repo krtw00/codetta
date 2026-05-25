@@ -107,11 +107,14 @@ async function callTool(name, args) {
     "clear_notes",
     "create_song",
     "edit_notes",
+    "export_midi",
     "get_song",
+    "import_midi",
     "list_effects",
     "list_instruments",
     "list_songs",
     "list_soundfont_presets",
+    "migrate_song",
     "remove_track",
     "render_wav",
     "set_fx",
@@ -149,7 +152,7 @@ async function callTool(name, args) {
     "codetta://presets/cyber-lead",
     "codetta://instruments",
     "codetta://effects",
-    "codetta://schema/song/0.1",
+    "codetta://schema/song/0.2",
   ]) {
     assert(
       resourceUris.includes(expectedUri),
@@ -209,9 +212,9 @@ async function callTool(name, args) {
   );
   console.log("[ok] resources/read effects ->", `${fxPayload.effects.length} effects`);
 
-  // resource: schema/song/0.1
+  // resource: schema/song/0.2
   const schemaText = await readResource(
-    "codetta://schema/song/0.1",
+    "codetta://schema/song/0.2",
     "application/schema+json",
   );
   const schemaPayload = JSON.parse(schemaText);
@@ -220,7 +223,7 @@ async function callTool(name, args) {
     "schema resource missing $id",
   );
   assert(schemaPayload.title === "Codetta Song", "schema title mismatch");
-  console.log("[ok] resources/read schema/song/0.1 ->", schemaPayload.$id);
+  console.log("[ok] resources/read schema/song/0.2 ->", schemaPayload.$id);
 
   // resource: schema with unknown version should fail
   {
@@ -241,25 +244,27 @@ async function callTool(name, args) {
   const absSongPath = created.path;
   console.log("[ok] create_song ->", absSongPath);
 
-  // add_track (MCP のみ — CLI 直叩き fallback を撤去)
+  // add_track (MCP のみ — CLI 直叩き fallback を撤去)。
+  // schema 0.2 では楽器 type は soundfont 一択 (file + preset + bank で指定)。
   const addedLead = await callTool("add_track", {
     path: songName,
     track_id: "lead",
-    instrument: "sin",
+    instrument: "soundfont",
+    params: { file: "GeneralUser-GS.sf2", preset: 81, bank: 0 },
     volume: 0.8,
   });
   assert(addedLead.track_id === "lead", "add_track track_id mismatch");
   console.log("[ok] add_track lead");
 
-  // 2 本目: drum_kit を params 付きで足す
+  // 2 本目: GM Drum kit (bank 128) を soundfont params で足す
   const addedDrum = await callTool("add_track", {
     path: songName,
     track_id: "drum",
-    instrument: "drum_kit",
-    params: { kit: "808" },
+    instrument: "soundfont",
+    params: { file: "GeneralUser-GS.sf2", preset: 0, bank: 128 },
   });
   assert(addedDrum.track_id === "drum", "add_track drum mismatch");
-  console.log("[ok] add_track drum (with params)");
+  console.log("[ok] add_track drum (GM drum kit)");
 
   // set_notes (lead)
   const setN = await callTool("set_notes", {
@@ -308,16 +313,16 @@ async function callTool(name, args) {
   });
   console.log("[ok] drum set_notes -> 4 kicks");
 
-  // set_instrument (lead を saw_lead に変更)
+  // set_instrument (lead を別 preset の soundfont に置換)
   const setInst = await callTool("set_instrument", {
     path: songName,
     track_id: "lead",
-    type: "saw_lead",
-    params: { attack: 0.005 },
+    type: "soundfont",
+    params: { file: "GeneralUser-GS.sf2", preset: 38, bank: 0 },
   });
-  assert(setInst.instrument === "saw_lead", "set_instrument mismatch");
-  assert(setInst.previous === "sin", "set_instrument previous mismatch");
-  console.log("[ok] set_instrument lead sin -> saw_lead");
+  assert(setInst.instrument === "soundfont", "set_instrument mismatch");
+  assert(setInst.previous === "soundfont", "set_instrument previous mismatch");
+  console.log("[ok] set_instrument lead preset 81 -> 38");
 
   // set_fx (lead に lowpass + reverb)
   const setFx = await callTool("set_fx", {
@@ -335,7 +340,7 @@ async function callTool(name, args) {
   const info = await callTool("get_song", { path: songName });
   assert(info.tracks.length === 2, `get_song tracks != 2 (got ${info.tracks.length})`);
   const leadInfo = info.tracks.find((t) => t.id === "lead");
-  assert(leadInfo?.instrument === "saw_lead", "get_song lead instrument mismatch");
+  assert(leadInfo?.instrument === "soundfont", "get_song lead instrument mismatch");
   assert(leadInfo?.note_count === 4, "get_song lead note_count mismatch");
   assert(leadInfo?.fx_count === 2, "get_song lead fx_count mismatch");
   console.log("[ok] get_song -> 2 tracks, lead has 4 notes + 2 fx");
@@ -365,12 +370,12 @@ async function callTool(name, args) {
     "application/json",
   );
   const songJson = JSON.parse(songText);
-  assert(songJson.version === "0.1", "song resource missing version");
+  assert(songJson.version === "0.2", "song resource missing version");
   assert(Array.isArray(songJson.tracks) && songJson.tracks.length === 2, "song resource tracks mismatch");
   const songLead = songJson.tracks.find((t) => t.id === "lead");
-  assert(songLead?.instrument?.type === "saw_lead", "song resource lead instrument mismatch");
+  assert(songLead?.instrument?.type === "soundfont", "song resource lead instrument mismatch");
   assert(Array.isArray(songLead?.notes) && songLead.notes.length === 4, "song resource lead notes mismatch");
-  console.log("[ok] resources/read songs/smoke-test -> v0.1, 2 tracks, lead notes intact");
+  console.log("[ok] resources/read songs/smoke-test -> v0.2, 2 tracks, lead notes intact");
 
   // resource: 存在しない song はエラー
   {

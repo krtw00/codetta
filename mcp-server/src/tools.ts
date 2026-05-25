@@ -251,7 +251,7 @@ export function registerTools(server: McpServer): void {
     {
       title: "Add a new track to a song",
       description:
-        "既存プロジェクトに新規トラックを追加する。instrument は list_instruments で確認できる type 名。params は Instrument 固有のパラメータ (例: { attack: 0.02 })。",
+        "既存プロジェクトに新規トラックを追加する。schema 0.2 の楽器 type は 'soundfont' のみ。SF2 は params で指定する (例: { file: 'GeneralUser-GS.sf2', preset: 81, bank: 0 }。 bank=128 は GM Drum kit)。list_instruments で詳細スキーマを確認できる。",
       inputSchema: {
         path: z.string().describe("対象 .codetta ファイル"),
         track_id: z
@@ -264,7 +264,7 @@ export function registerTools(server: McpServer): void {
         instrument: z
           .string()
           .optional()
-          .describe("楽器 type (例: 'sin', 'saw_lead', 'drum_kit'。 default 'sin')"),
+          .describe("楽器 type。 schema 0.2 では 'soundfont' のみ (default)。 SF2 file / preset / bank は params で渡す"),
         volume: z
           .number()
           .min(0)
@@ -497,11 +497,11 @@ export function registerTools(server: McpServer): void {
     {
       title: "Replace a track's instrument",
       description:
-        "指定トラックの楽器 (type + params) を完全置換する。params は Instrument 固有のパラメータ object (例: lowpass cutoff など)。 list_instruments で各 type のパラメータスキーマを確認できる。",
+        "指定トラックの楽器 (type + params) を完全置換する。schema 0.2 の type は 'soundfont' のみで、params で SF2 を指定する (例: { file: 'GeneralUser-GS.sf2', preset: 38, bank: 0 })。 list_instruments で各 type のパラメータスキーマを確認できる。",
       inputSchema: {
         path: z.string().describe("対象 .codetta ファイル"),
         track_id: z.string().describe("対象トラック ID"),
-        type: z.string().describe("新しい楽器 type (例: 'saw_lead', 'drum_kit')"),
+        type: z.string().describe("新しい楽器 type (schema 0.2 では 'soundfont')"),
         params: z
           .record(z.string(), z.unknown())
           .optional()
